@@ -32,8 +32,9 @@ public:
 	~Camera3HWInterface();
 
 	static const camera_metadata *initStaticMetadata(int cameraId);
+	static int validateCaptureRequest(camera3_capture_request_t *request,
+					  bool firstRequest);
 
-public:
 	/* public static functions called by camera service */
 	static int initialize(const struct camera3_device *device,
 			      const camera3_callback_ops_t *callback_ops);

@@ -30,6 +30,12 @@ namespace android {
 #define MAX_BUFFER_COUNT		8
 #define MIN_BUFFER_COUNT		1
 
+enum camera_streaming_mode {
+	IDLE_MODE = 0,
+	STREAMING_MODE,
+	STOP_MODE
+};
+
 typedef struct capture_result {
 	int			fd;
 	uint32_t		frame_number;
@@ -57,7 +63,8 @@ public:
 	/* Streamming Control */
 	int		initStreaming(private_handle_t *buffer);
 	int		stopStreaming(void);
-	bool		getStreamingMode(void);
+	uint32_t	getStreamingMode(void);
+	void		setStreamingMode(uint32_t mode);
 
 	/* Buffer Control */
 	int		registerBuffer(camera3_capture_request_t *buffer);
@@ -84,7 +91,7 @@ public:
 	uint32_t	mDqIndex;
 	uint32_t	mReqIndex;
 	uint32_t	mSize;
-	bool		mStreaming;
+	uint32_t	mStreaming;
 	const camera3_callback_ops_t *mCallback_ops;
 	capture_result_t mRequests[MAX_BUFFER_COUNT];
 	capture_result_t mQueued[MAX_BUFFER_COUNT];

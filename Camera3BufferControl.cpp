@@ -163,7 +163,7 @@ Camera3BufferControl::Camera3BufferControl(int handle,
 {
 	mFd = handle;
 	mCallback_ops = callback;
-	mStreaming = false;
+	mStreaming = IDLE_MODE;
 	mQIndex = 0;
 	mDqIndex = 0;
 	mReqIndex = 0;
@@ -242,10 +242,15 @@ int Camera3BufferControl::setBufferFormat(private_handle_t *buf)
 	return 0;
 }
 
-bool Camera3BufferControl::getStreamingMode(void)
+void Camera3BufferControl::setStreamingMode(uint32_t mode)
 {
-	ALOGV("[%s] streaming mode is %s\n", __FUNCTION__,
-	      mStreaming ? "TRUE" : "FALSE");
+	ALOGD("[%s] streaming mode is %d to %d\n", __FUNCTION__,
+	      mStreaming, mode);
+	mStreaming = mode;
+}
+
+uint32_t Camera3BufferControl::getStreamingMode(void)
+{
 	return mStreaming;
 }
 
@@ -293,11 +298,6 @@ int Camera3BufferControl::sendCaptureResult(bool queued, int index)
 	ALOGD("[%s] index:%d\n", __FUNCTION__, index);
 
 	memset(&result, 0x0, sizeof(camera3_capture_result_t));
-	if (buf.output_buffers.status) {
-		ALOGE("[%s] status is error, don't send result\n",
-		      __FUNCTION__);
-		return 0;
-	}
 	buf.output_buffers.release_fence  = -1;
 	buf.output_buffers.acquire_fence  = -1;
 	result.frame_number = buf.frame_number;
@@ -344,6 +344,8 @@ int Camera3BufferControl::stopStreaming(void)
 	if (!mStreaming)
 		return 0;
 
+	mStreaming = STOP_MODE;
+
 	ret = v4l2_streamoff(mFd);
 	if (ret) {
 		ALOGE("failed to stream on:%d\n", ret);
@@ -355,7 +357,7 @@ int Camera3BufferControl::stopStreaming(void)
 		ALOGE(" failed to req buf : %d\n", ret);
 		return -EINVAL;
 	}
-	mStreaming = false;
+	mStreaming = IDLE_MODE;
 
 	return 0;
 }
@@ -474,23 +476,17 @@ int Camera3BufferControl::addBuffer(capture_result_t *buf, bool queued,
 
 int Camera3BufferControl::moveToQueued(uint32_t index)
 {
+	int ret = 0;
+
 	ALOGV("[%s] mReqIndex: %d\n", __FUNCTION__, mReqIndex);
 
-	addBuffer(&mRequests[0], true, index);
-	mRequests[0].timestamp = (systemTime(SYSTEM_TIME_MONOTONIC)/
-				  default_frame_duration);
-	sendNotify((mRequests[0].output_buffers.status) ? true: false,
-		   mRequests[0].frame_number, mRequests[0].timestamp);
+	ret = addBuffer(&mRequests[0], true, index);
 	removeBuffer(0, false);
-	return 0;
+	return ret;
 }
 
 int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
 {
-	if (request == NULL) {
-		ALOGE("request is NULL\n");
-		return -EINVAL;
-	}
 	ALOGV("[%s] frame_number:%d, num_buffers:%d\n",
 	      __FUNCTION__, request->frame_number, request->num_output_buffers);
 
@@ -499,7 +495,7 @@ int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
 		ALOGE("Max Buffer is already queued : %d, %d\n",
 		      mQIndex, mReqIndex);
 		mMutex.unlock();
-		return -ENOMEM;
+		return -EINVAL;
 	}
 	mMutex.unlock();
 
@@ -540,6 +536,12 @@ int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
 			}
 		}
 
+		if (buf->share_fd < 0) {
+			ALOGE("[%s] Invalid fd is received:%d\n", __FUNCTION__,
+			      buf->share_fd);
+			return -EINVAL;
+		}
+		bzero(&buffer, sizeof(capture_result_t));
 		buffer.fd = buf->share_fd;
 		buffer.frame_number = request->frame_number;
 		buffer.num_output_buffers =
@@ -558,10 +560,7 @@ int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
 		bool queued = (!mStreaming);
 		mMutex.unlock();
 		addBuffer(&buffer, queued, index);
-
-		if (queued)
-			sendNotify((buffer.output_buffers.status) ? true: false,
-				   buffer.frame_number, buffer.timestamp);
+		sendNotify(false, buffer.frame_number, buffer.timestamp);
 	}
 	return 0;
 }
@@ -600,22 +599,58 @@ int Camera3BufferControl::checkResult(int index)
 
 int Camera3BufferControl::flush() {
 	int ret, dma_fd;
+	uint32_t i, reqIndex, qIndex;
 
 	ALOGD("[%s]\n", __FUNCTION__);
 
-	if (mStreaming)
-		stopStreaming();
-
-	for (uint32_t i = 0; i < mReqIndex; i++) {
-		sendNotify(true, mRequests[i].frame_number,
-			   mRequests[i].timestamp);
-		sendCaptureResult(false, i);
+	if (mStreaming == STREAMING_MODE) {
+		ret = stopStreaming();
+		if (ret)
+			return -EINVAL;
 	}
 
-	for (uint32_t i = 0; i < mQIndex; i++) {
+	mMutex.lock();
+	reqIndex = mReqIndex;
+	qIndex = mQIndex;
+	mMutex.unlock();
+
+#if 0
+	camera3_capture_result_t result;
+	camera3_stream_buffer_t buf[qIndex];
+
+	for (i = 0; i < qIndex + reqIndex; i++) {
+		buf[i].release_fence  = -1;
+		buf[i].acquire_fence  = -1;
+		buf[i].status = CAMERA3_BUFFER_STATUS_ERROR;
+	}
+	memset(&result, 0x0, sizeof(camera3_capture_result_t));
+	result.result = NULL;
+	result.num_output_buffers = qIndex+reqIndex;
+	result.output_buffers = buf;
+	result.partial_result = 0;
+	result.input_buffer = NULL;
+	result.frame_number = mQueued[0].frame_number;
+	mCallback_ops->process_capture_result(mCallback_ops, &result);
+#else
+	for (i = 0; i < qIndex; i++)
 		sendCaptureResult(true, i);
-		removeBuffer(i, true);
+	for (i = 0; i < reqIndex; i++)
+		sendCaptureResult(false, i);
+#endif
+	mMutex.lock();
+	/*
+	for (i = 0; i < MAX_BUFFER_COUNT; i++) {
+		memset(&mRequests[i], 0x0, sizeof(capture_result_t));
+		memset(&mRequests[i].output_buffers, 0x0,
+		       sizeof(camera3_stream_buffer_t));
+		memset(&mQueued[i], 0x0, sizeof(capture_result_t));
+		memset(&mQueued[i].output_buffers, 0x0,
+		       sizeof(camera3_stream_buffer_t));
 	}
+	*/
+	mQIndex = 0;
+	mReqIndex = 0;
+	mMutex.unlock();
 
 	ALOGD("[%s] Finished\n", __FUNCTION__);
 
@@ -633,7 +668,7 @@ status_t Camera3BufferControl::readyToRun() {
 		ALOGE("failed to stream on:%d\n", ret);
 		return ret;
 	}
-	mStreaming = true;
+	mStreaming = STREAMING_MODE;
 
 	return NO_ERROR;
 }
@@ -646,6 +681,9 @@ bool Camera3BufferControl::threadLoop() {
 
 	ALOGV("[%s]\n", __FUNCTION__);
 
+	if (mStreaming != STREAMING_MODE)
+		goto stopStreaming;
+
 	mMutex.lock();
 	index = mQIndex;
 	mMutex.unlock();
@@ -655,21 +693,21 @@ bool Camera3BufferControl::threadLoop() {
 		ret = v4l2_dqbuf(mFd, &index, &dma_fd, 1);
 		if (ret) {
 			ALOGE("failed to dqbuf:%d\n", ret);
-			goto error;
+			goto stopStreaming;
 		}
+		if (mStreaming != STREAMING_MODE)
+			goto stopStreaming;
+
 		mMutex.lock();
 		mDqIndex = index;
 		ALOGD("DqBuf : %d, qIndex: %d, dma_fd: %d\n",
 			mDqIndex, mQIndex, dma_fd);
 		mMutex.unlock();
 
-		if (!mStreaming)
-			goto error;
-
 		index = getBuffer(dma_fd);
 		if (index < 0) {
 			ALOGE("[%s] Invalied index:%d\n", __FUNCTION__, index);
-			goto error;
+			goto stopStreaming;
 		}
 
 		/* checkResult(index);*/
@@ -680,19 +718,27 @@ bool Camera3BufferControl::threadLoop() {
 			mMutex.lock();
 			index = mDqIndex;
 			mMutex.unlock();
-			moveToQueued(index);
+			ret = moveToQueued(index);
+			if (ret)
+				goto stopStreaming;
 		}
 	} else {
 		if (mReqIndex) {
 			mMutex.lock();
 			index = mQIndex;
 			mMutex.unlock();
-			moveToQueued(index);
+			ret = moveToQueued(index);
+			if (ret)
+				goto stopStreaming;
 		}
 	}
 
-	return mStreaming;
-error:
+	return true;
+
+stopStreaming:
+	ret = stopStreaming();
+	ALOGD("[%s] thread is stopped:%d\n", __FUNCTION__, ret);
+
 	return false;
 }
 

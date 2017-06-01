@@ -33,6 +33,8 @@
 
 #define getPriv(dev) ((Camera3HWInterface *)(((camera3_device_t *)dev)->priv))
 
+bool mCameraOpened = false;
+
 namespace android {
 
 /*****************************************************************************/
@@ -43,7 +45,7 @@ const camera_metadata_t *Camera3HWInterface::initStaticMetadata(int camera_id)
 	CameraMetadata staticInfo;
 	const camera_metadata_t *meta;
 
-	ALOGE("[%s] cameraID:%d\n", __FUNCTION__, camera_id);
+	ALOGD("[%s] cameraID:%d\n", __FUNCTION__, camera_id);
 	uint8_t facingBack = camera_id ? ANDROID_LENS_FACING_FRONT :
 		ANDROID_LENS_FACING_BACK;
 
@@ -460,7 +462,7 @@ const camera_metadata_t *Camera3HWInterface::initStaticMetadata(int camera_id)
 	staticInfo.update(ANDROID_SENSOR_AVAILABLE_TEST_PATTERN_MODES,
 			  avail_testpattern_modes, 2);
 
-	uint8_t max_pipeline_depth = 1;
+	uint8_t max_pipeline_depth = MAX_BUFFER_COUNT;
 	staticInfo.update(ANDROID_REQUEST_PIPELINE_MAX_DEPTH,
 			  &max_pipeline_depth,
 			  1);
@@ -681,6 +683,7 @@ int Camera3HWInterface::initialize(const struct camera3_device *device,
 	if (!hw) {
 		ALOGE("[%s] Camera3HW Interface is not initialized\n",
 		      __FUNCTION__);
+		return -ENODEV;
 	}
 
 	hw->mCallbacks = callback_ops;
@@ -695,21 +698,39 @@ int Camera3HWInterface::configureStreams(const struct camera3_device *device,
 	if (!hw) {
 		ALOGE("[%s] Camera3HW Interface is not initialized\n",
 		      __FUNCTION__);
+		return -ENODEV;
 	}
 
 	if ((stream_list == NULL) || (stream_list->streams == NULL)) {
 		ALOGE("[%s] stream configurationg is NULL\n", __FUNCTION__);
+		return -EINVAL;
 	}
 
 	ALOGD("[%s] num_streams:%d \n", __FUNCTION__, stream_list->num_streams);
 	for (size_t i = 0; i < stream_list->num_streams; i++) {
 		camera3_stream_t *new_stream = stream_list->streams[i];
+
+		if (new_stream->rotation) {
+			ALOGE("[%s] rotation is not supported:%d\n",
+			      __FUNCTION__, new_stream->rotation);
+			return -EINVAL;
+		}
 		if ((new_stream->stream_type == CAMERA3_STREAM_OUTPUT) ||
 		    (new_stream->stream_type == CAMERA3_STREAM_BIDIRECTIONAL)) {
+			ALOGD("[%zu] width:%d, height:%d, max buffers:%d, usage:0x%x\n",
+			      i, new_stream->width, new_stream->height,
+			      new_stream->max_buffers,
+			      new_stream->usage);
 			new_stream->max_buffers = MAX_BUFFER_COUNT;
 			if (new_stream->stream_type == CAMERA3_STREAM_OUTPUT)
-				new_stream->usage = GRALLOC_USAGE_HW_CAMERA_READ
-					| GRALLOC_USAGE_HW_CAMERA_WRITE;
+#if 1
+				new_stream->usage |=
+					(GRALLOC_USAGE_HW_CAMERA_READ
+					| GRALLOC_USAGE_HW_CAMERA_WRITE);
+#else
+				new_stream->usage |=
+					 (GRALLOC_USAGE_SW_READ_MASK);
+#endif
 			else if (new_stream->stream_type ==
 				 CAMERA3_STREAM_OUTPUT) {
 				if (new_stream->usage &
@@ -772,14 +793,66 @@ const camera_metadata_t* Camera3HWInterface::constructDefaultRequestSettings(con
 	return metaInfo;
 }
 
+int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t *
+					       request,
+					       bool firstRequest)
+{
+	const camera3_stream_buffer_t *buf;
+	int ret = -EINVAL;
+
+	if (request == NULL) {
+		ALOGE("[%s] capture request is NULL\n", __FUNCTION__);
+		return ret;
+	}
+
+	if (request->settings == NULL && (firstRequest)) {
+		ALOGE("[%s] meta info can't be NULL for the first request\n",
+		      __FUNCTION__);
+		return ret;
+	}
+
+	if ((request->num_output_buffers < 1) ||
+	    (request->output_buffers == NULL)) {
+		ALOGE("[%s] output buffer is NULL\n", __FUNCTION__);
+		return ret;
+	}
+
+	buf = request->output_buffers;
+	for (uint32_t i = 0; i < request->num_output_buffers;) {
+		ret = -ENODEV;
+		if (buf->release_fence != -1) {
+			ALOGE("[Buffer:%d] release fence is not -1\n", i);
+			return ret;
+		}
+		if (buf->status != CAMERA3_BUFFER_STATUS_OK) {
+			ALOGE("[Buffer:%d] status is not OK\n", i);
+			return ret;
+		}
+		if (buf->buffer == NULL) {
+			ALOGE("[Buffer:%d] buffer handle is NULL\n", i);
+			return ret;
+		}
+		if (*(buf->buffer) == NULL) {
+			ALOGE("[Buffer:%d] private handle is NULL\n", i);
+			return ret;
+		}
+		i++;
+		buf = request->output_buffers + i;
+	}
+
+	return 0;
+}
+
 int Camera3HWInterface::processCaptureRequest(const struct camera3_device *device,
 					      camera3_capture_request_t *request)
 {
 	Camera3HWInterface *hw = getPriv(device);
 	int ret;
 
-	ALOGD("[%s] num of output buffers:%d\n", __FUNCTION__,
-	      request->num_output_buffers);
+	bool firstRequest = (hw->mBufControl == NULL) ? true: false;
+	ret = validateCaptureRequest(request, firstRequest);
+	if (ret)
+		return ret;
 
 	if (hw->mBufControl == NULL) {
 		camera3_stream_t *stream = request->output_buffers->stream;
@@ -789,6 +862,9 @@ int Camera3HWInterface::processCaptureRequest(const struct camera3_device *devic
 
 		hw->mBufControl = new Camera3BufferControl(hw->mHandle,
 							   hw->mCallbacks);
+		if (hw->mBufControl == NULL)
+			return -ENODEV;
+
 		ret = hw->mBufControl->initStreaming(buffer);
 		if (ret)
 			return ret;
@@ -802,15 +878,14 @@ int Camera3HWInterface::processCaptureRequest(const struct camera3_device *devic
 			if (!ret) {
 				hw->mBufControl->readyToRun();
 				hw->mBufControl->run(String8::format("Camera3BufferControlThread"));
-			}
-			return 0;
+				return 0;
+			} else
+				return -ENODEV;
 		    }
 		}
 	 }
 
-	hw->mBufControl->registerBuffer(request);
-
-	return 0;
+	return hw->mBufControl->registerBuffer(request);
 }
 
 int Camera3HWInterface::flush(const struct camera3_device *device)
@@ -818,6 +893,9 @@ int Camera3HWInterface::flush(const struct camera3_device *device)
 	Camera3HWInterface *hw  = getPriv(device);
 
 	ALOGD("[%s]\n", __FUNCTION__);
+
+	if (hw->mBufControl == NULL)
+		return -ENODEV;
 
 	hw->mBufControl->flush();
 
@@ -847,21 +925,22 @@ int Camera3HWInterface::cameraDeviceClose(struct hw_device_t* device)
 
 	ALOGD("[%s] handle:%d\n", __FUNCTION__, hw->mHandle);
 
-	hw->mBufControl->stopStreaming();
-
-	while(hw->mBufControl->isRunning());
-
-	if (hw->mBufControl != NULL)
+	if ((hw->mBufControl != NULL) && (hw->mBufControl->isRunning())) {
+		hw->mBufControl->setStreamingMode(STOP_MODE);
+		while (hw->mBufControl->getStreamingMode());
+		hw->mBufControl->flush();
 		hw->mBufControl = NULL;
+	}
 
-	if (hw->mHandle)
+	if (hw->mHandle > 0) {
 		close(hw->mHandle);
+		hw->mHandle = -1;
+	}
 
-	if (dev)
-		delete dev;
 	if (hw)
 		delete hw;
 
+	mCameraOpened = false;
 	return 0;
 }
 
@@ -872,6 +951,7 @@ Camera3HWInterface::Camera3HWInterface(int cameraId, int fd)
 
 	memset(&mCameraDevice, 0x0, sizeof(camera3_device_t));
 
+	mCameraOpened = false;
 	mBufControl = NULL;
 	mHandle = fd;
 	mCameraId = cameraId;
@@ -910,7 +990,7 @@ static int get_camera_info(int camera_id, struct camera_info *info)
 {
 	int ret = 0;
 
-	ALOGE("[%s] cameraID:%d", __FUNCTION__, camera_id);
+	ALOGD("[%s] cameraID:%d", __FUNCTION__, camera_id);
 
 	/* 0 = BACK, 1 = FRONT */
 	info->facing = camera_id ? CAMERA_FACING_FRONT :
@@ -956,6 +1036,11 @@ static int cameraDeviceOpen(const struct hw_module_t *module,
 
 	ALOGD("[%s]\n", __FUNCTION__);
 
+	if (mCameraOpened) {
+		*device = NULL;
+		return PERMISSION_DENIED;
+	}
+
 	camera_id = atoi(id);
 	if ((camera_id < 0 ) || (camera_id >= get_number_of_cameras()))
 		return -EINVAL;
@@ -969,12 +1054,13 @@ static int cameraDeviceOpen(const struct hw_module_t *module,
 	}
 
 	Camera3HWInterface *camera3Hal = new Camera3HWInterface(camera_id, fd);
-	if (!camera3Hal) {
+	if (camera3Hal == NULL) {
 		ALOGE("[%s] failed to create Camera3HWInterface\n",
 		      __FUNCTION__);
 		return -ENOMEM;
 	}
 	*device = &camera3Hal->mCameraDevice.common;
+	mCameraOpened = true;
 
 	return 0;
 }
