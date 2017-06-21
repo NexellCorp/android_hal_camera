@@ -51,6 +51,7 @@ const camera_metadata_t *Camera3HWInterface::initStaticMetadata(int camera_id)
 
 	/* android.info: hardware level */
 	uint8_t supportedHardwareLevel =
+		//ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_FULL;
 		ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED;
 	staticInfo.update(ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL,
 			  &supportedHardwareLevel, 1);
@@ -172,7 +173,6 @@ const camera_metadata_t *Camera3HWInterface::initStaticMetadata(int camera_id)
 		HAL_PIXEL_FORMAT_YCbCr_420_888,
 		HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
 		HAL_PIXEL_FORMAT_BLOB};
-		//HAL_PIXEL_FORMAT_YCrCb_420_SP};
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_FORMATS,
 			  scaler_formats, sizeof(scaler_formats)/sizeof(int32_t));
 
@@ -444,7 +444,7 @@ const camera_metadata_t *Camera3HWInterface::initStaticMetadata(int camera_id)
 
 	int32_t max_output_streams[3] = {
 		1 /*MAX_STALLING_STREAMS*/,
-		3 /*MAX_PROCESSED_STREAMS*/,
+		MAX_PROCESSED_STREAMS/*MAX_PROCESSED_STREAMS*/,
 		1 /*MAX_RAW_STREAMS*/};
 	staticInfo.update(ANDROID_REQUEST_MAX_NUM_OUTPUT_STREAMS,
 			  max_output_streams, 3);
@@ -467,11 +467,10 @@ const camera_metadata_t *Camera3HWInterface::initStaticMetadata(int camera_id)
 			  &max_pipeline_depth,
 			  1);
 	/* don't set this meta info if we don't support partial result */
-#if 0
-	int32_t partial_result_count = 0; /*PARTIAL_RESULT_COUNT;*/
+	int32_t partial_result_count = 2;
 	staticInfo.update(ANDROID_REQUEST_PARTIAL_RESULT_COUNT,
-			  &partial_result_count, 1);
-#endif
+			  &partial_result_count,
+			  1);
 	int32_t max_stall_duration = 1/*MAX_REPROCESS_STALL*/;
 	staticInfo.update(ANDROID_REPROCESS_MAX_CAPTURE_STALL,
 			  &max_stall_duration, 1);
@@ -633,7 +632,7 @@ const camera_metadata_t *Camera3HWInterface::initStaticMetadata(int camera_id)
 	ANDROID_REQUEST_PIPELINE_MAX_DEPTH, ANDROID_REQUEST_AVAILABLE_CAPABILITIES,
 	ANDROID_REQUEST_AVAILABLE_REQUEST_KEYS, ANDROID_REQUEST_AVAILABLE_RESULT_KEYS,
 	ANDROID_REQUEST_AVAILABLE_CHARACTERISTICS_KEYS,
-	/*ANDROID_REQUEST_PARTIAL_RESULT_COUNT,*/
+	ANDROID_REQUEST_PARTIAL_RESULT_COUNT,
 	ANDROID_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM,
 	ANDROID_SCALER_AVAILABLE_INPUT_OUTPUT_FORMATS_MAP,
 	ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS,
@@ -717,21 +716,23 @@ int Camera3HWInterface::configureStreams(const struct camera3_device *device,
 		}
 		if ((new_stream->stream_type == CAMERA3_STREAM_OUTPUT) ||
 		    (new_stream->stream_type == CAMERA3_STREAM_BIDIRECTIONAL)) {
-			ALOGD("[%zu] width:%d, height:%d, max buffers:%d, usage:0x%x\n",
-			      i, new_stream->width, new_stream->height,
+			ALOGD("[%zu] format:0x%x, width:%d, height:%d, max buffers:%d, usage:0x%x\n",
+			      i, new_stream->format, new_stream->width, new_stream->height,
 			      new_stream->max_buffers,
 			      new_stream->usage);
 			new_stream->max_buffers = MAX_BUFFER_COUNT;
-			if (new_stream->stream_type == CAMERA3_STREAM_OUTPUT)
-#if 1
-				new_stream->usage |=
-					(GRALLOC_USAGE_HW_CAMERA_READ
-					| GRALLOC_USAGE_HW_CAMERA_WRITE);
-#else
-				new_stream->usage |=
-					 (GRALLOC_USAGE_SW_READ_MASK);
-#endif
-			else if (new_stream->stream_type ==
+			if (new_stream->stream_type == CAMERA3_STREAM_OUTPUT) {
+				if (new_stream->format ==
+				    HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED)
+					new_stream->usage |=
+						GRALLOC_USAGE_HW_CAMERA_WRITE;
+				else if (new_stream->format ==
+					 HAL_PIXEL_FORMAT_BLOB)
+					new_stream->usage |=
+					(GRALLOC_USAGE_SW_WRITE_MASK
+					| GRALLOC_USAGE_SW_WRITE_OFTEN
+					| GRALLOC_USAGE_SW_READ_MASK);
+			} else if (new_stream->stream_type ==
 				 CAMERA3_STREAM_OUTPUT) {
 				if (new_stream->usage &
 				    GRALLOC_USAGE_HW_VIDEO_ENCODER)
@@ -743,7 +744,6 @@ int Camera3HWInterface::configureStreams(const struct camera3_device *device,
 					new_stream->usage =
 						GRALLOC_USAGE_HW_CAMERA_WRITE;
 			}
-
 		}
 		ALOGD("[%s] stream type = %d, max_buffer = %d \n",
 		      __FUNCTION__, new_stream->stream_type,
@@ -753,10 +753,9 @@ int Camera3HWInterface::configureStreams(const struct camera3_device *device,
 	return 0;
 }
 
-const camera_metadata_t* Camera3HWInterface::constructDefaultRequestSettings(const struct
-									     camera3_device
-									     *device,
-									     int type)
+const camera_metadata_t*
+Camera3HWInterface::constructDefaultRequestSettings(const struct camera3_device *device,
+						    int type)
 {
 	CameraMetadata metaData;
 	camera_metadata_t *metaInfo;
@@ -771,25 +770,84 @@ const camera_metadata_t* Camera3HWInterface::constructDefaultRequestSettings(con
 
 	uint8_t controlIntent = 0;
 
+	uint8_t focusMode;
+	uint8_t optStabMode;
+	uint8_t cacMode;
+	uint8_t edge_mode;
+	uint8_t noise_red_mode;
+	uint8_t tonemap_mode;
 	switch (type) {
 	case CAMERA3_TEMPLATE_PREVIEW:
+		ALOGD("[%s] CAMERA3_TEMPLATE_PREVIEW \n", __FUNCTION__);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+		edge_mode = ANDROID_EDGE_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+		tonemap_mode = ANDROID_TONEMAP_MODE_FAST;
+		break;
+	case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
+		ALOGD("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG\n", __FUNCTION__);
+		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
+		edge_mode = ANDROID_EDGE_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
+		tonemap_mode = ANDROID_TONEMAP_MODE_HIGH_QUALITY;
+		break;
+	case CAMERA3_TEMPLATE_STILL_CAPTURE:
+		ALOGD("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE\n", __FUNCTION__);
+		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
+		edge_mode = ANDROID_EDGE_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
+		tonemap_mode = ANDROID_TONEMAP_MODE_HIGH_QUALITY;
 		break;
 	default:
+		ALOGD("[%s] not supported\n", __FUNCTION__);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_CUSTOM;
 		break;
 	}
 	metaData.update(ANDROID_CONTROL_CAPTURE_INTENT, &controlIntent, 1);
+	metaData.update(ANDROID_COLOR_CORRECTION_ABERRATION_MODE, &cacMode, 1);
+	metaData.update(ANDROID_CONTROL_AF_MODE, &focusMode, 1);
+	metaData.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &optStabMode,
+			1);
+	metaData.update(ANDROID_TONEMAP_MODE, &tonemap_mode, 1);
+	metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noise_red_mode, 1);
+	metaData.update(ANDROID_EDGE_MODE, &edge_mode, 1);
 
 	/*flash */
 	static const uint8_t flashMode = ANDROID_FLASH_MODE_OFF;
 	metaData.update(ANDROID_FLASH_MODE, &flashMode, 1);
 
+	static const uint8_t aeLock = ANDROID_CONTROL_AE_LOCK_OFF;
+	metaData.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
+
+	static const uint8_t awbLock = ANDROID_CONTROL_AWB_LOCK_OFF;
+	metaData.update(ANDROID_CONTROL_AWB_LOCK, &awbLock, 1);
+
+	static const uint8_t awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+	metaData.update(ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
+
+	static const uint8_t controlMode = ANDROID_CONTROL_MODE_OFF;
+	metaData.update(ANDROID_CONTROL_MODE, &controlMode, 1);
+
+	static const uint8_t effectMode = ANDROID_CONTROL_EFFECT_MODE_OFF;
+	metaData.update(ANDROID_CONTROL_EFFECT_MODE, &effectMode, 1);
+
+	static const uint8_t aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+	metaData.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
+
+	static const uint8_t sceneMode =
+		ANDROID_CONTROL_SCENE_MODE_FACE_PRIORITY;
+	metaData.update(ANDROID_CONTROL_SCENE_MODE, &sceneMode, 1);
+
 	metaInfo = metaData.release();
-	/*
-	 * Todo
-	 * check whether there is a need to set static metadata again or not
-	 */
 	return metaInfo;
 }
 
@@ -799,6 +857,8 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t *
 {
 	const camera3_stream_buffer_t *buf;
 	int ret = -EINVAL;
+
+	ALOGD("[%s]\n", __FUNCTION__);
 
 	if (request == NULL) {
 		ALOGE("[%s] capture request is NULL\n", __FUNCTION__);
@@ -843,16 +903,106 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t *
 	return 0;
 }
 
+int Camera3HWInterface::sendUrgentResult(camera3_capture_request_t *request,
+					 int8_t trigger, int32_t trigger_id)
+{
+	camera3_capture_result_t result;
+	CameraMetadata camMetadata;
+	camera3_notify_msg_t msg;
+	int64_t timestamp = (systemTime(SYSTEM_TIME_MONOTONIC)/
+			     default_frame_duration);
+
+	memset(&msg, 0x0, sizeof(camera3_notify_msg_t));
+	msg.type = CAMERA3_MSG_SHUTTER;
+	msg.message.shutter.frame_number = request->frame_number;
+	msg.message.shutter.timestamp = timestamp;
+	mCallbacks->notify(mCallbacks, &msg);
+
+	uint8_t ae_state = (uint8_t)ANDROID_CONTROL_AE_STATE_CONVERGED;
+	camMetadata.update(ANDROID_CONTROL_AE_STATE, &ae_state, 1);
+	uint8_t afState = (uint8_t)ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+	camMetadata.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
+	uint8_t  focusMode =
+		(uint8_t)ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+	camMetadata.update(ANDROID_CONTROL_AF_MODE, &focusMode, 1);
+	if (trigger > 0) {
+		uint8_t trigger_v = trigger;
+		camMetadata.update(ANDROID_CONTROL_AF_TRIGGER, &trigger_v, 1);
+	}
+	if (trigger_id > 0)
+		camMetadata.update(ANDROID_CONTROL_AF_TRIGGER_ID, &trigger_id,
+				   1);
+	camMetadata.update(ANDROID_SENSOR_TIMESTAMP, &timestamp, 1);
+
+	ALOGD("[%s] tirgger:%d, id:%d\n", __FUNCTION__, trigger, trigger_id);
+
+	memset(&result, 0x0, sizeof(camera3_capture_result_t));
+	result.frame_number = request->frame_number;
+	result.result = camMetadata.release();
+	result.num_output_buffers = request->num_output_buffers;
+	result.output_buffers = request->output_buffers;
+	result.partial_result = 1;
+	result.input_buffer = NULL;
+	ALOGD("[%s] frame_number:%d, num_buffers:%d, buffers:%p, status:%d\n",
+	      __FUNCTION__, result.frame_number, result.num_output_buffers,
+	      result.output_buffers, result.output_buffers->status);
+
+	mCallbacks->process_capture_result(mCallbacks, &result);
+
+	return 0;
+}
+
 int Camera3HWInterface::processCaptureRequest(const struct camera3_device *device,
 					      camera3_capture_request_t *request)
 {
 	Camera3HWInterface *hw = getPriv(device);
 	int ret;
-
+	CameraMetadata meta;
 	bool firstRequest = (hw->mBufControl == NULL) ? true: false;
+	bool capture = false;
+
 	ret = validateCaptureRequest(request, firstRequest);
 	if (ret)
 		return ret;
+
+	if (request->input_buffer != NULL) {
+		ALOGD("[%s] frame number:%d - has input buffer\n",
+		      __FUNCTION__, request->frame_number);
+		const camera3_stream_buffer_t *input = request->input_buffer;
+		private_handle_t *buf = (private_handle_t *)*input->buffer;
+		ALOGD("[Input] fd:%d, format:0x%x, size:%d, width:%d, height:%d, stride:%d\n",
+		      buf->share_fd, buf->format, buf->size, buf->width, buf->height,
+		      buf->stride);
+	}
+
+	meta = request->settings;
+	if (meta.exists(ANDROID_CONTROL_CAPTURE_INTENT)) {
+		uint8_t captureIntent =
+			meta.find(ANDROID_CONTROL_CAPTURE_INTENT).data.u8[0];
+
+		int32_t request_id = -1;
+		if (meta.exists(ANDROID_REQUEST_ID))
+			request_id = meta.find(ANDROID_REQUEST_ID).data.i32[0];
+
+		ALOGD("framenumber:%d, captureIntent:%d, requestId:%d\n",
+		      request->frame_number, captureIntent, request_id);
+
+		if (captureIntent ==
+		    ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
+			capture = true;
+
+		if (meta.exists(ANDROID_CONTROL_AF_TRIGGER)) {
+		     ALOGD("AF Trigger Info exist");
+		     uint8_t trigger = 0, trigger_id = -1;
+		     trigger = meta.find(ANDROID_CONTROL_AF_TRIGGER).data.u8[0];
+		     if (meta.exists(ANDROID_CONTROL_AF_TRIGGER_ID))
+			 trigger_id =
+			 meta.find(ANDROID_CONTROL_AF_TRIGGER_ID).data.i32[0];
+		     hw->sendUrgentResult(request, trigger, trigger_id);
+
+		     return 0;
+		}
+	}
 
 	if (hw->mBufControl == NULL) {
 		camera3_stream_t *stream = request->output_buffers->stream;
@@ -874,7 +1024,7 @@ int Camera3HWInterface::processCaptureRequest(const struct camera3_device *devic
 			uint32_t index = hw->mBufControl->getQIndex();
 			ALOGD("[%s] qbuf count is %d\n", __FUNCTION__, index);
 		    if (index >= MIN_BUFFER_COUNT) {
-			int ret = hw->mBufControl->registerBuffer(request);
+			ret = hw->mBufControl->registerBuffer(request, capture);
 			if (!ret) {
 				hw->mBufControl->readyToRun();
 				hw->mBufControl->run(String8::format("Camera3BufferControlThread"));
@@ -884,8 +1034,8 @@ int Camera3HWInterface::processCaptureRequest(const struct camera3_device *devic
 		    }
 		}
 	 }
-
-	return hw->mBufControl->registerBuffer(request);
+	ret = hw->mBufControl->registerBuffer(request, capture);
+	return ret;
 }
 
 int Camera3HWInterface::flush(const struct camera3_device *device)
@@ -972,7 +1122,7 @@ Camera3HWInterface::~Camera3HWInterface(void)
 /*****************************************************************************/
 /* Common Camera Hal Interface						     */
 /*****************************************************************************/
-static int get_number_of_cameras(void)
+static int getNumberOfCameras(void)
 {
 	/*
 	 * only count built in camera BACK + FRONT
@@ -986,7 +1136,7 @@ static int get_number_of_cameras(void)
 	return numOfcameras;
 }
 
-static int get_camera_info(int camera_id, struct camera_info *info)
+static int getCameraInfo(int camera_id, struct camera_info *info)
 {
 	int ret = 0;
 
@@ -1017,7 +1167,7 @@ static int get_camera_info(int camera_id, struct camera_info *info)
 	return 0;
 }
 
-static int set_callbacks(const camera_module_callbacks_t *callbacks)
+static int setCallBacks(const camera_module_callbacks_t *callbacks)
 {
 	/*
 	 * Need to set callback for torch_mode_status_change()
@@ -1042,7 +1192,7 @@ static int cameraDeviceOpen(const struct hw_module_t *module,
 	}
 
 	camera_id = atoi(id);
-	if ((camera_id < 0 ) || (camera_id >= get_number_of_cameras()))
+	if ((camera_id < 0 ) || (camera_id >= getNumberOfCameras()))
 		return -EINVAL;
 
 	fd = open("/dev/video6", O_RDWR);
@@ -1082,9 +1232,9 @@ camera_module_t HAL_MODULE_INFO_SYM = {
 		.dso = NULL,
 		.reserved = {0},
 	},
-	.get_number_of_cameras = get_number_of_cameras,
-	.get_camera_info = get_camera_info,
-	.set_callbacks = set_callbacks,
+	.get_number_of_cameras = getNumberOfCameras,
+	.get_camera_info = getCameraInfo,
+	.set_callbacks = setCallBacks,
 	.get_vendor_tag_ops = NULL,
 	.open_legacy = NULL,
 	.set_torch_mode = NULL,

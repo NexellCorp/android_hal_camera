@@ -29,6 +29,7 @@ namespace android {
 #define MAX_NUM_PLANES			3
 #define MAX_BUFFER_COUNT		8
 #define MIN_BUFFER_COUNT		1
+#define MAX_PROCESSED_STREAMS		2
 
 enum camera_streaming_mode {
 	IDLE_MODE = 0,
@@ -41,8 +42,16 @@ typedef struct capture_result {
 	uint32_t		frame_number;
 	nsecs_t			timestamp;
 	uint32_t		num_output_buffers;
-	camera3_stream_buffer_t output_buffers;
+	bool			capture;
+	camera3_stream_buffer_t output_buffers[MAX_PROCESSED_STREAMS];
 } capture_result_t;
+
+// add for planar jpeg encoding
+struct ycbcr_planar {
+	unsigned char *y;
+	unsigned char *cb;
+	unsigned char *cr;
+};
 
 /*****************************************************************************/
 /* Camera3 Buffer Control Class                                               */
@@ -65,9 +74,11 @@ public:
 	int		stopStreaming(void);
 	uint32_t	getStreamingMode(void);
 	void		setStreamingMode(uint32_t mode);
+	int		stillCapture(int index);
 
 	/* Buffer Control */
-	int		registerBuffer(camera3_capture_request_t *buffer);
+	int		registerBuffer(camera3_capture_request_t *buffer,
+				       bool capture);
 	int		getQIndex(void);
 	int		setBufferFormat(private_handle_t *buffer);
 	int		addBuffer(capture_result_t *buf, bool queued,
@@ -76,6 +87,11 @@ public:
 	int		getBuffer(int fd);
 	int		moveToQueued(uint32_t index);
 	int		flush(void);
+	int		getVirtForHandle(private_handle_t const *handle,
+					 unsigned long *buf);
+	int		releaseVirtForHandle(private_handle_t const *handle,
+					     unsigned long virt);
+	bool		isCapture(int index);
 
 	/* Callback Function */
 	int		sendNotify(bool error, uint32_t frame_number,
@@ -90,6 +106,7 @@ public:
 	uint32_t	mQIndex;
 	uint32_t	mDqIndex;
 	uint32_t	mReqIndex;
+	uint32_t	mCapIndex;
 	uint32_t	mSize;
 	uint32_t	mStreaming;
 	const camera3_callback_ops_t *mCallback_ops;

@@ -34,6 +34,7 @@
 #include <gralloc_priv.h>
 #include <hardware/gralloc.h>
 
+#include <camera/CameraMetadata.h>
 #include <hardware/camera.h>
 #include <hardware/camera3.h>
 
@@ -58,7 +59,7 @@ static int v4l2_set_format(int fd, uint32_t w, uint32_t h, uint32_t num_planes,
 
 	v4l2_fmt.fmt.pix_mp.width = w;
 	v4l2_fmt.fmt.pix_mp.height = h;
-	v4l2_fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_YVU420;
+	v4l2_fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_YUV420;
 	v4l2_fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
 	v4l2_fmt.fmt.pix_mp.num_planes = num_planes;
 	for (uint32_t i = 0; i < num_planes; i++) {
@@ -167,14 +168,15 @@ Camera3BufferControl::Camera3BufferControl(int handle,
 	mQIndex = 0;
 	mDqIndex = 0;
 	mReqIndex = 0;
+	mCapIndex = 0;
 
 	for (int i = 0; i < MAX_BUFFER_COUNT; i++) {
 		memset(&mRequests[i], 0x0, sizeof(capture_result_t));
 		memset(&mRequests[i].output_buffers, 0x0,
-		       sizeof(camera3_stream_buffer_t));
+		       sizeof(camera3_stream_buffer_t)*MAX_PROCESSED_STREAMS);
 		memset(&mQueued[i], 0x0, sizeof(capture_result_t));
 		memset(&mQueued[i].output_buffers, 0x0,
-		       sizeof(camera3_stream_buffer_t));
+		       sizeof(camera3_stream_buffer_t)*MAX_PROCESSED_STREAMS);
 	}
 }
 
@@ -198,13 +200,8 @@ int Camera3BufferControl::setBufferFormat(private_handle_t *buf)
 	int ret = module->lock_ycbcr(module, buf, PROT_READ | PROT_WRITE, 0, 0,
 				     buf->width, buf->height, &ycbcr);
 	if (ret) {
-		ALOGE("failed to lock_ycbcr for EGL_YV12_KHR format");
+		ALOGE("failed to lock_ycbcr for the buf - %d", buf->share_fd);
 		return -EINVAL;
-	}
-	ret = module->unlock(module, buf);
-	if (ret) {
-		ALOGE("[%s] failed to gralloc unlock:%d\n", __FUNCTION__, ret);
-		return ret;
 	}
 
 	uint32_t num_planes = 3;
@@ -217,9 +214,9 @@ int Camera3BufferControl::setBufferFormat(private_handle_t *buf)
 	      ycbcr.cstride);
 
 	strides[0] = (uint32_t)ycbcr.ystride;
-	sizes[0] = (uint64_t)(ycbcr.cr) - (uint64_t)(ycbcr.y);
+	sizes[0] = (uint64_t)(ycbcr.cb) - (uint64_t)(ycbcr.y);
 	strides[1] = strides[2] = (uint32_t)ycbcr.cstride;
-	sizes[1] = sizes[2] = (uint64_t)ycbcr.cb - (uint64_t)ycbcr.cr;
+	sizes[1] = sizes[2] = (uint64_t)ycbcr.cr - (uint64_t)ycbcr.cb;
 
 	mSize = 0;
 	for (uint32_t i = 0; i < num_planes; i++) {
@@ -239,6 +236,11 @@ int Camera3BufferControl::setBufferFormat(private_handle_t *buf)
 		return ret;
 	}
 
+	ret = module->unlock(module, buf);
+	if (ret) {
+		ALOGE("[%s] failed to gralloc unlock:%d\n", __FUNCTION__, ret);
+		return ret;
+	}
 	return 0;
 }
 
@@ -264,7 +266,7 @@ int Camera3BufferControl::sendNotify(bool error, uint32_t frame_number,
 {
 	camera3_notify_msg_t msg;
 
-	ALOGD("[%s] %s - frame_number : %d, timestamp : %ld\n", __FUNCTION__,
+	ALOGV("[%s] %s - frame_number : %d, timestamp : %ld\n", __FUNCTION__,
 	      (error) ? "Error" : "Success", frame_number, timestamp);
 
 	memset(&msg, 0x0, sizeof(camera3_notify_msg_t));
@@ -292,23 +294,33 @@ int Camera3BufferControl::sendCaptureResult(bool queued, int index)
 	mMutex.lock();
 	if (queued)
 		buf = mQueued[index];
-	else buf = mRequests[index];
+	else
+		buf = mRequests[index];
 	mMutex.unlock();
 
-	ALOGD("[%s] index:%d\n", __FUNCTION__, index);
+	ALOGV("[%s] index:%d\n", __FUNCTION__, index);
 
-	memset(&result, 0x0, sizeof(camera3_capture_result_t));
-	buf.output_buffers.release_fence  = -1;
-	buf.output_buffers.acquire_fence  = -1;
+	bzero(&result, sizeof(camera3_capture_result_t));
+	for (uint32_t i = 0; i < buf.num_output_buffers; i++) {
+		buf.output_buffers[i].release_fence  = -1;
+		buf.output_buffers[i].acquire_fence  = -1;
+	}
 	result.frame_number = buf.frame_number;
-	result.result = NULL;
+
+		result.result = NULL;
+
 	result.num_output_buffers = buf.num_output_buffers;
-	result.output_buffers = &buf.output_buffers;
-	result.partial_result = 0;
+	result.output_buffers = buf.output_buffers;
+	if (result.result == NULL)
+		result.partial_result = 0;
+	else
+		result.partial_result = 1;
 	result.input_buffer = NULL;
-	ALOGD("[%s] frame_number:%d, num_buffers:%d, buffers:%p, status:%d\n",
+
+	ALOGV("[%s] frame_number:%d, num_buffers:%d, buffers:%p, status:%d\n",
 	      __FUNCTION__, result.frame_number, result.num_output_buffers,
 	      result.output_buffers, result.output_buffers->status);
+
 	mCallback_ops->process_capture_result(mCallback_ops, &result);
 
 	return 0;
@@ -381,25 +393,22 @@ int Camera3BufferControl::removeBuffer(int index, bool queued)
 	for (i = 0; i < bufCount; i++) {
 		if (i == index) {
 			memset(&buf[i], 0x0, sizeof(capture_result_t));
-			memset(&buf[i].output_buffers, 0x0,
-			       sizeof(camera3_stream_buffer_t));
+			memset(buf[i].output_buffers, 0x0,
+			       sizeof(camera3_stream_buffer_t)*MAX_PROCESSED_STREAMS);
 			for (; i < (bufCount-1); i++) {
 				memcpy(&buf[i], &buf[i+1],
 				       sizeof(capture_result_t));
-				memcpy(&buf[i].output_buffers,
-				       &buf[i+1].output_buffers,
-				       sizeof(camera3_stream_buffer_t));
+				memcpy(buf[i].output_buffers,
+				       buf[i+1].output_buffers,
+				       sizeof(camera3_stream_buffer_t)*MAX_PROCESSED_STREAMS);
 			}
-			memset(&buf[i], 0x0, sizeof(capture_result_t));
-			memset(&buf[i].output_buffers, 0x0,
-			       sizeof(camera3_stream_buffer_t));
-			if (queued)
-				mQIndex--;
-			else
-				mReqIndex--;
-			break;
+			bufCount--;
 		}
 	}
+	if (queued)
+		mQIndex = bufCount;
+	else
+		mReqIndex = bufCount;
 	ALOGV("[%s] End QIndex:%d, ReqIndex:%d, i:%d\n", __FUNCTION__, mQIndex,
 	      mReqIndex, i);
 	mMutex.unlock();
@@ -417,7 +426,7 @@ int Camera3BufferControl::getBuffer(int fd)
 	mMutex.lock();
 	for (i = 0; i < mQIndex; i++) {
 		if (mQueued[i].fd == fd) {
-			ALOGD("[%s] i is %d\n", __FUNCTION__, i);
+			ALOGV("[%s] i is %d\n", __FUNCTION__, i);
 			mMutex.unlock();
 			return i;
 		}
@@ -456,16 +465,17 @@ int Camera3BufferControl::addBuffer(capture_result_t *buf, bool queued,
 		}
 		mMutex.lock();
 		memcpy(&mQueued[mQIndex], buf, sizeof(capture_result_t));
-		memcpy(&mQueued[mQIndex].output_buffers, &buf->output_buffers,
-		       sizeof(camera3_stream_buffer_t));
+		memcpy(mQueued[mQIndex].output_buffers, buf->output_buffers,
+		       sizeof(camera3_stream_buffer_t)*buf->num_output_buffers);
 		mQIndex++;
 		ALOGV("[%s] mQIndex: %d\n", __FUNCTION__, mQIndex);
 		mMutex.unlock();
 	} else {
 		mMutex.lock();
 		memcpy(&mRequests[mReqIndex], buf, sizeof(capture_result_t));
-		memcpy(&mRequests[mReqIndex].output_buffers,
-		       &buf->output_buffers, sizeof(camera3_stream_buffer_t));
+		memcpy(mRequests[mReqIndex].output_buffers,
+		       buf->output_buffers,
+		       sizeof(camera3_stream_buffer_t)*buf->num_output_buffers);
 		mReqIndex++;
 		ALOGV("[%s] mReqIndex: %d\n", __FUNCTION__, mReqIndex);
 		mMutex.unlock();
@@ -485,10 +495,10 @@ int Camera3BufferControl::moveToQueued(uint32_t index)
 	return ret;
 }
 
-int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
+int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request,
+					 bool capture)
 {
-	ALOGV("[%s] frame_number:%d, num_buffers:%d\n",
-	      __FUNCTION__, request->frame_number, request->num_output_buffers);
+	capture_result_t buffer;
 
 	mMutex.lock();
 	if ((mQIndex >= MAX_BUFFER_COUNT) && (mReqIndex >= MAX_BUFFER_COUNT)) {
@@ -499,16 +509,19 @@ int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
 	}
 	mMutex.unlock();
 
+	bzero(&buffer, sizeof(capture_result_t));
+	ALOGV("[%s] frame_number:%d, num_buffers:%d\n",
+	      __FUNCTION__, request->frame_number, request->num_output_buffers);
 	for (uint32_t i = 0; i < request->num_output_buffers; i++) {
 		const camera3_stream_buffer_t *output =
 			&request->output_buffers[i];
 		private_handle_t *buf =
 			(private_handle_t *)*output->buffer;
-		capture_result_t buffer;
 
-		ALOGV("[%d] fd:%d, ion_hnd:%p, size:%d, width:%d, height:%d, stride:%d\n",
-		      i, buf->share_fd, buf->ion_hnd, buf->size, buf->width,
-		      buf->height, buf->stride);
+		ALOGV("[%d] streamType:%d, format:0x%x, width:%d, height:%d,usage:0x%x\n",
+		      i, output->stream->stream_type, output->stream->format,
+		      output->stream->width, output->stream->height,
+		      output->stream->usage);
 
 		if (output->status) {
 			ALOGE("[%s] Buffer is not valid to use:%d\n",
@@ -524,10 +537,10 @@ int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
 		}
 
 		if (output->acquire_fence != -1) {
-			ALOGD("[%s] acquire fence is exist:%d\n", __FUNCTION__,
+			ALOGV("[%s] acquire fence is exist:%d\n", __FUNCTION__,
 			      output->acquire_fence);
 			int32_t rc = sync_wait(output->acquire_fence, -1);
-			ALOGD("[%s] fence is released\n", __FUNCTION__);
+			ALOGV("[%s] fence is released\n", __FUNCTION__);
 			close(output->acquire_fence);
 			if (rc != OK) {
 				ALOGE("[%s] sync wait is failed : %d\n",
@@ -541,27 +554,42 @@ int Camera3BufferControl::registerBuffer(camera3_capture_request_t *request)
 			      buf->share_fd);
 			return -EINVAL;
 		}
-		bzero(&buffer, sizeof(capture_result_t));
-		buffer.fd = buf->share_fd;
+		buffer.capture = capture;
+		if (request->num_output_buffers > 1) {
+			if (buf->format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
+				buffer.fd = buf->share_fd;
+				memcpy(&buffer.output_buffers[0], output,
+				       sizeof(camera3_stream_buffer_t));
+			} else {
+				memcpy(&buffer.output_buffers[1], output,
+				       sizeof(camera3_stream_buffer_t));
+			}
+			ALOGV("[%d] format = 0x%x, fd :%d, width:%d, height:%d\n",
+			      i, buf->format, buffer.fd, buf->width, buf->height);
+		} else {
+			buffer.fd = buf->share_fd;
+			memcpy(&buffer.output_buffers[i], output,
+			       sizeof(camera3_stream_buffer_t));
+		}
 		buffer.frame_number = request->frame_number;
 		buffer.num_output_buffers =
 			request->num_output_buffers;
 		buffer.timestamp =
 			(systemTime(SYSTEM_TIME_MONOTONIC)/
 			 default_frame_duration);
-		memcpy(&buffer.output_buffers, output,
-		       sizeof(camera3_stream_buffer_t));
-		ALOGV("fd:%d, frameNumber:%d, num_buffers:%d, timestamp:%lld\n",
-		      buffer.fd, buffer.frame_number,
+		ALOGV("[%s] fd:%d, capture:%d, frameNumber:%d, num_buffers:%d, timestamp:%lld\n",
+		      __FUNCTION__,
+		      buffer.fd, buffer.capture, buffer.frame_number,
 		      buffer.num_output_buffers,
 		      buffer.timestamp);
-		mMutex.lock();
-		int index = (mStreaming) ? mDqIndex: mQIndex;
-		bool queued = (!mStreaming);
-		mMutex.unlock();
-		addBuffer(&buffer, queued, index);
-		sendNotify(false, buffer.frame_number, buffer.timestamp);
 	}
+	mMutex.lock();
+	int index = (mStreaming) ? mDqIndex: mQIndex;
+	bool queued = (!mStreaming);
+	mMutex.unlock();
+	addBuffer(&buffer, queued, index);
+	sendNotify(false, buffer.frame_number, buffer.timestamp);
+
 	return 0;
 }
 
@@ -569,7 +597,7 @@ int Camera3BufferControl::checkResult(int index)
 {
 	void *virt;
 	const camera3_stream_buffer_t *output =
-		&mQueued[index].output_buffers;
+		&mQueued[index].output_buffers[0];
 	private_handle_t *buf =
 		(private_handle_t*)*output->buffer;
 
@@ -587,7 +615,7 @@ int Camera3BufferControl::checkResult(int index)
 		data++;
 	}
 	memset(virt, 0x10, buf->size);
-	ALOGD("[%s] hnd:%p, fd:%d, size:%d, stride:%d\n", __FUNCTION__,
+	ALOGV("[%s] hnd:%p, fd:%d, size:%d, stride:%d\n", __FUNCTION__,
 	      buf->ion_hnd, buf->share_fd, buf->size, buf->stride);
 	/*
 	memset(buf + (mStrides[0] * mHeight), 0x80, mSizes[1]);
@@ -657,7 +685,8 @@ int Camera3BufferControl::flush() {
 	return 0;
 }
 
-status_t Camera3BufferControl::readyToRun() {
+status_t Camera3BufferControl::readyToRun(void)
+{
 
 	int ret, dma_fd;
 
@@ -673,11 +702,112 @@ status_t Camera3BufferControl::readyToRun() {
 	return NO_ERROR;
 }
 
-bool Camera3BufferControl::threadLoop() {
+int Camera3BufferControl::releaseVirtForHandle(private_handle_t const *handle,
+					       unsigned long virt)
+{
+	munmap((void*)virt, handle->size);
+	return 0;
+}
+
+int Camera3BufferControl::getVirtForHandle(private_handle_t const *handle,
+					   unsigned long *buf)
+{
+	void *ptr = mmap(0, handle->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+			 handle->share_fd, 0);
+	if (MAP_FAILED == ptr) {
+		ALOGE("%s: failed to mmap for %d", __func__, handle->share_fd);
+		return -EINVAL;
+	}
+	*buf = (unsigned long)ptr;
+	return 0;
+}
+
+int Camera3BufferControl::stillCapture(int index)
+{
+	int ret;
+
+	mMutex.lock();
+	capture_result_t buf = mQueued[index];
+	mMutex.unlock();
+
+	if (buf.num_output_buffers == 1) {
+		ALOGE("[%s] num_output_buffers:%d\n", __FUNCTION__,
+		      buf.num_output_buffers);
+		return -EINVAL;
+	}
+
+	camera3_stream_buffer_t *src =
+		&buf.output_buffers[0];
+	private_handle_t *srcBuf = (private_handle_t*)*src->buffer;
+	if (srcBuf == NULL) {
+		ALOGE("[%s] srcBuf is NULL\n", __FUNCTION__);
+		return -EINVAL;
+	}
+	ALOGV("[%s] get source buffer\n", __FUNCTION__);
+
+	camera3_stream_buffer_t *dst =
+		&buf.output_buffers[1];
+	private_handle_t *dstBuf = (private_handle_t*)*dst->buffer;
+	if (dstBuf == NULL) {
+		ALOGE("[%s] dstBuf is NULL\n", __FUNCTION__);
+		return -EINVAL;
+	}
+
+	hw_module_t const *pmodule = NULL;
+	gralloc_module_t const *module = NULL;
+	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
+	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
+	android_ycbcr ycbcr_src, ycbcr_dst;
+
+	ret = module->lock_ycbcr(module, dstBuf, PROT_READ | PROT_WRITE, 0, 0,
+				 dstBuf->width, dstBuf->height, &ycbcr_dst);
+	if (ret) {
+		ALOGE("failed to lock_ycbcr for dst buffer");
+		return -EINVAL;
+	}
+	ret = module->lock_ycbcr(module, srcBuf, PROT_READ | PROT_WRITE, 0, 0,
+				 srcBuf->width, srcBuf->height, &ycbcr_src);
+	if (ret) {
+		ALOGE("failed to lock_ycbcr for src buffer");
+		return -EINVAL;
+	}
+	ALOGV("[SRCAddr] Y:%p, Cb:%p, Cr:%p\n",
+	      ycbcr_src.y, ycbcr_src.cb, ycbcr_src.cr);
+	ALOGV("[DSTAddr] Y:%p, Cb:%p, Cr:%p\n",
+	      ycbcr_dst.y, ycbcr_dst.cb, ycbcr_dst.cr);
+
+	memcpy((void*)ycbcr_dst.y, (void*)ycbcr_src.y, srcBuf->size);
+
+	ret = module->unlock(module, dstBuf);
+	if (ret) {
+		ALOGE("[%s] failed to gralloc unlock:%d\n", __FUNCTION__, ret);
+		return ret;
+	}
+	ret = module->unlock(module, srcBuf);
+	if (ret) {
+		ALOGE("[%s] failed to gralloc unlock:%d\n", __FUNCTION__, ret);
+		return ret;
+	}
+	return 0;
+}
+
+bool Camera3BufferControl::isCapture(int index)
+{
+	bool ret = false;
+
+	mMutex.lock();
+	ret = mQueued[index].capture;
+	mMutex.unlock();
+
+	return ret;
+}
+
+bool Camera3BufferControl::threadLoop(void)
+{
 	int ret, dma_fd;
 	status_t res;
 	capture_result_t	*result;
-	int	 index;
+	int	 index = 0;
 
 	ALOGV("[%s]\n", __FUNCTION__);
 
@@ -700,7 +830,7 @@ bool Camera3BufferControl::threadLoop() {
 
 		mMutex.lock();
 		mDqIndex = index;
-		ALOGD("DqBuf : %d, qIndex: %d, dma_fd: %d\n",
+		ALOGV("DqBuf : %d, qIndex: %d, dma_fd: %d\n",
 			mDqIndex, mQIndex, dma_fd);
 		mMutex.unlock();
 
@@ -709,8 +839,13 @@ bool Camera3BufferControl::threadLoop() {
 			ALOGE("[%s] Invalied index:%d\n", __FUNCTION__, index);
 			goto stopStreaming;
 		}
-
 		/* checkResult(index);*/
+		ALOGV("[%s] isCapture:%d\n",
+		      __FUNCTION__, isCapture(index));
+		if (isCapture(index)) {
+			if (stillCapture(index))
+				goto stopStreaming;
+		}
 		sendCaptureResult(true, index);
 		removeBuffer(index, true);
 

@@ -35,6 +35,10 @@ public:
 	static int validateCaptureRequest(camera3_capture_request_t *request,
 					  bool firstRequest);
 
+	/* callbacks */
+	int sendUrgentResult(camera3_capture_request_t *request,
+			     int8_t trigger, int32_t trigger_id);
+
 	/* public static functions called by camera service */
 	static int initialize(const struct camera3_device *device,
 			      const camera3_callback_ops_t *callback_ops);
