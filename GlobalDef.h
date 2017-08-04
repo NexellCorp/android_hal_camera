@@ -2,7 +2,24 @@
 #define GLOBAL_DEF_H
 
 #define MAX_BUFFER_COUNT	8
-#define PREVIEW_DEVICE		"/dev/video6"
+
+#ifdef BOARD_CAMERA_BACK_DEVICE
+#define BACK_CAMERA_DEVICE		BOARD_CAMERA_BACK_DEVICE
+#else
+#define BACK_CAMERA_DEVICE		"/dev/video6"
+#endif
+
+#ifdef BOARD_CAMERA_FRONT_DEVICE
+#define FRONT_CAMERA_DEVICE		BOARD_CAMERA_FRONT_DEVICE
+#else
+#define FRONT_CAMERA_DEVICE		"/dev/video7"
+#endif
+
+#ifdef BOARD_CAMERA_NUM
+#define NUM_OF_CAMERAS		BOARD_CAMERA_NUM
+#else
+#define NUM_OF_CAMERAS		1
+#endif
 
 enum {
 	PREVIEW_STREAM = 0,
@@ -10,5 +27,5 @@ enum {
 	CAPTURE_STREAM,
 	MAX_STREAM
 };
-	
+
 #endif

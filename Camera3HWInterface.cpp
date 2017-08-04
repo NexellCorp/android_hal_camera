@@ -113,6 +113,7 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 	mCameraDevice.ops = &camera3Ops;
 	mCameraDevice.priv = this;
 
+	ALOGI("cameraId = %d", cameraId);
 	ALOGI("tag = %d", mCameraDevice.common.tag);
 	ALOGI("version = %d", mCameraDevice.common.version);
 }
@@ -128,10 +129,14 @@ Camera3HWInterface::~Camera3HWInterface(void)
 int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 {
 	int fd;
-	
-	fd = open(PREVIEW_DEVICE, O_RDWR);
+
+	if (mCameraId == 0)
+		fd = open(BACK_CAMERA_DEVICE, O_RDWR);
+	else
+		fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
 	if (fd < 0) {
-		ALOGE("Failed to open %s", PREVIEW_DEVICE);
+		ALOGE("Failed to open %s camera :%d",
+			(mCameraId) ? "Front"  : "Back", fd);
 		return -ENODEV;
 	}
 	mPreviewHandle = fd;
@@ -386,10 +391,11 @@ static int getNumberOfCameras(void)
 	 */
 	/* TODO: need to get device camera information interface
 	 * Currently hard coded.
+	 * TODO: need to implement a case when we support cameras more than 1
+	 * Currently only support one camera
 	 */
-	int numOfcameras = 1; /* currently just set 1 not 2 */
-	ALOGI("[%s] num of cameras:%d", __func__, numOfcameras);
-	return numOfcameras;
+	ALOGI("[%s] num of cameras:%d", __func__, NUM_OF_CAMERAS);
+	return NUM_OF_CAMERAS;
 }
 
 static int getCameraInfo(int camera_id, struct camera_info *info)
