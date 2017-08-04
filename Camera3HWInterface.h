@@ -16,11 +16,10 @@
 #ifndef CAMERA3_HW_INTERFACE_H
 #define CAMERA3_HW_INTERFACE_H
 
-#include "Camera3BufferControl.h"
+#include "GlobalDef.h"
+#include "StreamManager.h"
 
 namespace android {
-
-#define default_frame_duration 33333333L // 1/30 s
 
 /*****************************************************************************/
 /* Camera3 Hal Interface Class                                               */
@@ -28,45 +27,30 @@ namespace android {
 class Camera3HWInterface {
 
 public:
-	Camera3HWInterface(int cameraId, int fd);
+	Camera3HWInterface(int cameraId);
 	~Camera3HWInterface();
 
-	static const camera_metadata *initStaticMetadata(int cameraId);
-	static int validateCaptureRequest(camera3_capture_request_t *request,
-					  bool firstRequest);
+	int initialize(const camera3_callback_ops_t *callback_ops);
+	int configureStreams(camera3_stream_configuration_t *stream_list);
+	const camera_metadata_t *constructDefaultRequestSettings(int type);
+	int processCaptureRequest(camera3_capture_request_t *request);
+	int flush();
 
-	/* callbacks */
-	int sendUrgentResult(camera3_capture_request_t *request,
-			     int8_t trigger, int32_t trigger_id);
-
-	/* public static functions called by camera service */
-	static int initialize(const struct camera3_device *device,
-			      const camera3_callback_ops_t *callback_ops);
-
-	static int configureStreams(const struct camera3_device *device,
-				    camera3_stream_configuration_t *stream_list);
-
-	static const camera_metadata_t *constructDefaultRequestSettings(const struct
-									camera3_device *device,
-									int type);
-
-	static int processCaptureRequest(const struct camera3_device *device,
-					 camera3_capture_request_t *request);
-
-	static int flush(const struct camera3_device *device);
-
-	static int cameraDeviceClose(struct hw_device_t* device);
-
-public:
-	camera3_device_t mCameraDevice;
+	int cameraDeviceClose();
+	camera3_device_t *getCameraDevice() {
+		return &mCameraDevice;
+	}
 
 private:
-	int mHandle;
 	int mCameraId;
 	const camera3_callback_ops_t *mCallbacks;
-	sp<Camera3BufferControl> mBufControl;
+	int mPreviewHandle;
+
+private:
+	camera3_device_t mCameraDevice;
+	sp<StreamManager> mPreviewManager;
 };
 
-}
+} // namespace android
 
 #endif /* CAMERA3_HW_INTERFACE_H */
