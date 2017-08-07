@@ -42,6 +42,7 @@ public:
 			  camera3_stream_t *rs = NULL, buffer_handle_t *rb = NULL,
 			  camera3_stream_t *cs = NULL, buffer_handle_t *cb = NULL) {
 		mFrameNumber = frameNumber;
+		mHaveTrigger = false;
 		mStreams[PREVIEW_STREAM] = ps;
 		mStreams[RECORD_STREAM] = rs;
 		mStreams[CAPTURE_STREAM] = cs;
@@ -80,6 +81,10 @@ public:
 		return mFrameNumber;
 	}
 
+	bool haveTrigger() {
+		return mHaveTrigger;
+	}
+
 	void setRecord(camera3_stream_t *s, buffer_handle_t *b) {
 		mStreams[RECORD_STREAM] = s;
 		mBuffers[RECORD_STREAM] = b;
@@ -94,10 +99,15 @@ public:
 		mFrameNumber = number;
 	}
 
+	void setTrigger(bool trigger) {
+		mHaveTrigger = trigger;
+	}
+
 private:
 	camera3_stream_t *mStreams[MAX_STREAM];
 	buffer_handle_t  *mBuffers[MAX_STREAM];
-	uint32_t mFrameNumber;
+	bool		mHaveTrigger;
+	uint32_t	mFrameNumber;
 };
 
 class StreamManager : public Thread {

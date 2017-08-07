@@ -24,10 +24,11 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 
 	dbg_stream("registerRequest --> num_output_buffers %d",
 			   r->num_output_buffers);
+
 	for (uint32_t i = 0; i < r->num_output_buffers; i++) {
 		const camera3_stream_buffer_t *b = &r->output_buffers[i];
 		if (b->status) {
-			ALOGE("buffer status is not valid to use: 0x%x", b->status); 
+			ALOGE("buffer status is not valid to use: 0x%x", b->status);
 			return -EINVAL;
 		}
 
@@ -53,6 +54,7 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 			ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
 			return -ENOMEM;
 		}
+
 		if (recordBuffer == NULL)
 			buf->init(r->frame_number, previewBuffer->stream,
 					  previewBuffer->buffer);
@@ -60,6 +62,11 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 			buf->init(r->frame_number,
 					  previewBuffer->stream, previewBuffer->buffer,
 					  recordBuffer->stream, recordBuffer->buffer);
+
+		CameraMetadata meta;
+		meta = r->settings;
+		if (meta.exists(ANDROID_CONTROL_AF_TRIGGER))
+			buf->setTrigger(true);
 
 		dbg_stream("CREATE FN ---> %d", buf->getFrameNumber());
 		dbg_stream("mQ.queue: %p", buf);
@@ -291,7 +298,20 @@ int StreamManager::sendResult(bool drain)
 	result.output_buffers = output_buffer;
 
 	metaData.update(ANDROID_SENSOR_TIMESTAMP, &timestamp, 1);
+	if (buf->haveTrigger()) {
+		uint8_t ae_state = (uint8_t)ANDROID_CONTROL_AE_STATE_CONVERGED;
+		metaData.update(ANDROID_CONTROL_AE_STATE, &ae_state, 1);
+		uint8_t afState = (uint8_t)ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+		metaData.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
+	}
 	result.result = metaData.release();
+
+	/*
+         * If we set 'ANDROID_REQUEST_PARTIAL_RESULT_COUNT' to metadata
+         * pratial_result should be same as the value
+         * or bigger than the value
+         * but not '0' for the case that result have metadata
+         */
 	result.partial_result = 1;
 
 	result.input_buffer = NULL;
@@ -387,7 +407,31 @@ int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)
 
 	dbg_stream("src: %p(%d) --> dst: %p(%d)", srcY.y, src->size,
 			   dstY.y, dst->size);
-	memcpy(dstY.y, srcY.y, src->size);
+
+	if ((src->width == dst->width) && (src->height == dst->height)) {
+		if ((srcY.ystride == dstY.ystride) && (srcY.cstride == dstY.cstride))
+			memcpy(dstY.y, srcY.y, src->size);
+		else {
+			dbg_stream("src and dst buffer has a different alingment");
+			for (int i = 0; i < src->height; i++) {
+				unsigned long srcOffset = i * srcY.ystride;
+				unsigned long srcCbCrOffset = (i/2) * srcY.cstride;
+				unsigned long dstOffset = i * dstY.ystride;
+				unsigned long dstCbCrOffset = (i/2) * dstY.cstride;
+				memcpy((void*)((unsigned long)dstY.y + dstOffset),
+					(void*)((unsigned long)srcY.y + srcOffset),
+					dstY.ystride);
+				if (i%2 == 0) {
+					memcpy((void*)((unsigned long)dstY.cb + dstCbCrOffset),
+						(void*)((unsigned long)srcY.cb + srcCbCrOffset),
+						dstY.cstride);
+					memcpy((void*)((unsigned long)dstY.cr + dstCbCrOffset),
+						(void*)((unsigned long)srcY.cr + srcCbCrOffset),
+						dstY.cstride);
+				}
+			}
+		}
+	}
 
 	ret = module->unlock(module, dst);
 	if (ret) {
