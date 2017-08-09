@@ -5,22 +5,31 @@
 #include <camera/Camera.h>
 #include <hardware/camera3.h>
 
+#include <libnxjpeg.h>
+
 #include "v4l2.h"
 #include "StreamManager.h"
 
 namespace android {
 
-// #define TRACE_STREAM
+#define TRACE_STREAM
 #ifdef TRACE_STREAM
 #define dbg_stream(a...)	ALOGD(a)
 #else
 #define dbg_stream(a...)
 #endif
 
+struct ycbcr_planar {
+    unsigned char *y;
+    unsigned char *cb;
+    unsigned char *cr;
+};
+
 int StreamManager::registerRequest(camera3_capture_request_t *r)
 {
 	const camera3_stream_buffer_t *previewBuffer = NULL;
 	const camera3_stream_buffer_t *recordBuffer = NULL;
+	const camera3_stream_buffer_t *captureBuffer = NULL;
 
 	dbg_stream("registerRequest --> num_output_buffers %d",
 			   r->num_output_buffers);
@@ -42,9 +51,15 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 
 		if (ph->format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
 			previewBuffer = b;
-		} else {
+		} else if (ph->format == HAL_PIXEL_FORMAT_YCbCr_420_888) {
 			/* TODO: assume video */
 			recordBuffer = b;
+		} else {
+			dbg_stream("this formate:0x%x might be for video snapshot",
+					ph->format);
+			dbg_stream("width:%d, height:%d, size:%d",
+					ph->width, ph->height, ph->size);
+			captureBuffer = b;
 		}
 	}
 
@@ -56,17 +71,26 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 		}
 
 		if (recordBuffer == NULL)
-			buf->init(r->frame_number, previewBuffer->stream,
+				buf->init(r->frame_number, previewBuffer->stream,
 					  previewBuffer->buffer);
-		else
-			buf->init(r->frame_number,
+		else {
+			if (captureBuffer == NULL)
+				buf->init(r->frame_number,
 					  previewBuffer->stream, previewBuffer->buffer,
 					  recordBuffer->stream, recordBuffer->buffer);
+			else
+				buf->init(r->frame_number,
+					  previewBuffer->stream, previewBuffer->buffer,
+					  recordBuffer->stream, recordBuffer->buffer,
+					  captureBuffer->stream, captureBuffer->buffer);
+		}
 
 		CameraMetadata meta;
 		meta = r->settings;
-		if (meta.exists(ANDROID_CONTROL_AF_TRIGGER))
+		if (meta.exists(ANDROID_CONTROL_AF_TRIGGER)) {
+			dbg_stream("This frame has trigger info");
 			buf->setTrigger(true);
+		}
 
 		dbg_stream("CREATE FN ---> %d", buf->getFrameNumber());
 		dbg_stream("mQ.queue: %p", buf);
@@ -275,7 +299,7 @@ int StreamManager::sendResult(bool drain)
 	result.frame_number = buf->getFrameNumber();
 	result.num_output_buffers = 1;
 
-	camera3_stream_buffer_t output_buffer[2];
+	camera3_stream_buffer_t output_buffer[MAX_STREAM];
 	output_buffer[0].stream = buf->getStream(PREVIEW_STREAM);
 	output_buffer[0].buffer = buf->getBuffer(PREVIEW_STREAM);
 	output_buffer[0].release_fence = -1;
@@ -283,16 +307,29 @@ int StreamManager::sendResult(bool drain)
 	output_buffer[0].status = 0;
 
 	if (buf->getStream(RECORD_STREAM) != NULL) {
-		if (!drain)
+		if (!drain) {
 			copyBuffer(buf->getPrivateHandle(RECORD_STREAM),
-					   buf->getPrivateHandle(PREVIEW_STREAM));
-
+					buf->getPrivateHandle(PREVIEW_STREAM));
+		}
 		result.num_output_buffers++;
 		output_buffer[1].stream = buf->getStream(RECORD_STREAM);
 		output_buffer[1].buffer = buf->getBuffer(RECORD_STREAM);
 		output_buffer[1].release_fence = -1;
 		output_buffer[1].acquire_fence = -1;
 		output_buffer[1].status = 0;
+
+		if (buf->getStream(CAPTURE_STREAM) != NULL) {
+			dbg_stream("jpeg encoding for video snapshot:%d", drain);
+			if (!drain)
+				jpegEncoding(buf->getPrivateHandle(CAPTURE_STREAM),
+						buf->getPrivateHandle(RECORD_STREAM));
+			result.num_output_buffers++;
+			output_buffer[2].stream = buf->getStream(CAPTURE_STREAM);
+			output_buffer[2].buffer = buf->getBuffer(CAPTURE_STREAM);
+			output_buffer[2].release_fence = -1;
+			output_buffer[2].acquire_fence = -1;
+			output_buffer[2].status = 0;
+		}
 	}
 
 	result.output_buffers = output_buffer;
@@ -317,9 +354,9 @@ int StreamManager::sendResult(bool drain)
 	result.input_buffer = NULL;
 
 	dbg_stream("RETURN FN ---> %d", buf->getFrameNumber());
-	mPrevFrameNumber = buf->getFrameNumber();
 	mCallbacks->process_capture_result(mCallbacks, &result);
 
+	mPrevFrameNumber = buf->getFrameNumber();
 	mFQ.queue(buf);
 
 	dbg_stream("sendResult: X");
@@ -380,6 +417,81 @@ void StreamManager::drainBuffer()
 		sendResult(true);
 
 	dbg_stream("end draining");
+}
+
+int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
+{
+	android_ycbcr srcY;
+	void *dstY;
+
+	hw_module_t const *pmodule = NULL;
+	gralloc_module_t const *module = NULL;
+	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
+	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
+
+	dbg_stream("start jpegEncoding");
+
+	dstY = mmap(0, dst->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+			dst->share_fd, 0);
+	if (MAP_FAILED == dstY) {
+		ALOGE("failed to mmap for dstY");
+		return -EINVAL;
+	}
+
+	int ret = module->lock_ycbcr(module, src, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
+					src->width, src->height, &srcY);
+	if (ret) {
+		ALOGE("Failed to lock for src");
+		module->unlock(module, dst);
+		return ret;
+	}
+
+	dbg_stream("src: %p(%d) --> dst: %p(%d)", srcY.y, src->size,
+			   dstY, dst->size);
+
+	int jpegSize;
+	int jpegBufSize;
+	char *jpegBuf;
+	camera3_jpeg_blob_t *jpegBlob;
+	struct ycbcr_planar planar;
+	planar.y = (unsigned char*)srcY.y;
+	planar.cb = (unsigned char*)srcY.cb;
+	planar.cr = (unsigned char*)srcY.cr;
+	jpegSize = NX_JpegEncoding((unsigned char *)dstY, dst->size,
+					(unsigned char const *)&planar, src->width,
+					src->height, srcY.ystride, srcY.cstride, 100,
+					NX_PIXFORMAT_YUV420);
+	if (jpegSize <= 0) {
+		ALOGE("failed to NX_JpegEncoding!!!");
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	jpegBufSize = dst->size;
+	jpegBuf = (char *)dstY;
+	jpegBlob = (camera3_jpeg_blob_t *)(&jpegBuf[jpegBufSize -
+						sizeof(camera3_jpeg_blob_t)]);
+	jpegBlob->jpeg_size = jpegSize;
+	jpegBlob->jpeg_blob_id = CAMERA3_JPEG_BLOB_ID;
+	ALOGD("capture success: jpegSize(%d), totalSize(%d)",
+		jpegSize, jpegBlob->jpeg_size);
+
+	ret = 0;
+
+unlock:
+	ret = module->unlock(module, dst);
+	if (ret) {
+		ALOGE("Failed to gralloc unlock for dst:%d\n", ret);
+		return ret;
+	}
+	ret = module->unlock(module, src);
+	if (ret) {
+		ALOGE("Failed to gralloc unlock for src:%d\n", ret);
+		return ret;
+	}
+
+	dbg_stream("end jpegEncoding");
+	return ret;
 }
 
 int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)

@@ -318,7 +318,6 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 	}
 
 	/* preview, record, capture: called once per stream */
-	bool requestRegistered = false;
 	if (meta.exists(ANDROID_CONTROL_CAPTURE_INTENT)) {
 		uint8_t captureIntent =
 			meta.find(ANDROID_CONTROL_CAPTURE_INTENT).data.u8[0];
@@ -329,36 +328,28 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 		if ((captureIntent == ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW) ||
 			(captureIntent == ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD)) {
 			/* stop is implicit */
-			if (mPreviewManager != NULL) {
-				if (mPreviewManager->getIntent() == captureIntent) {
-					ALOGD("Current Request is own to deleted stream");
-					ret = mPreviewManager->registerRequest(request);
-					if (ret) {
-						ALOGE("Failed to registerRequest for preview");
-						return ret;
-					}
-					requestRegistered = true;
-				}
-
-				ALOGD("del Stream");
-				ALOGD("==================================================");
-				mPreviewManager->stopStreaming();
-				// TODO: check destructor
-				mPreviewManager = NULL;
+			if ((mPreviewManager != NULL) &&
+				(mPreviewManager->getIntent() != captureIntent)) {
+					ALOGD("del Stream");
+					ALOGD("==================================================");
+					mPreviewManager->stopStreaming();
+					// TODO: check destructor
+					mPreviewManager = NULL;
 			}
-
-			ALOGD("new Stream");
-			ALOGD("==================================================");
-			mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks,
-												captureIntent);
 			if (mPreviewManager == NULL) {
-				ALOGE("Failed to construct StreamManager for preview");
-				return -ENOMEM;
+				ALOGD("new Stream");
+				ALOGD("==================================================");
+				mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks,
+									captureIntent);
+				if (mPreviewManager == NULL) {
+					ALOGE("Failed to construct StreamManager for preview");
+					return -ENOMEM;
+				}
 			}
 		}
 	}
 
-	if (mPreviewManager != NULL && requestRegistered == false) {
+	if (mPreviewManager != NULL) {
 		ret = mPreviewManager->registerRequest(request);
 		if (ret) {
 			ALOGE("Failed to registerRequest for preview");

@@ -416,10 +416,9 @@ const camera_metadata_t *initStaticMetadata(int camera_id)
 
 	/* TODO: must need MAX_STALLING_STREAMS, MAX_RAW_STREAMS ? */
 	int32_t max_output_streams[3] = {
-		1, /* MAX_STALLING_STREAMS */
-		// MAX_PROCESSED_STREAMS, #<{(|MAX_PROCESSED_STREAMS|)}>#
-		3, /* MAX_PROCESSED_STREAMS */
-		1, /* MAX_RAW_STREAMS */
+		1,		/* MAX_STALLING_STREAMS */
+		MAX_STREAM,	/* MAX_PROCESSED_STREAMS */
+		1,		/* MAX_RAW_STREAMS */
 	};
 	staticInfo.update(ANDROID_REQUEST_MAX_NUM_OUTPUT_STREAMS,
 					  max_output_streams, 3);

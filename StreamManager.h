@@ -160,6 +160,7 @@ private:
 	void drainBuffer();
 	void stopV4l2();
 	int copyBuffer(private_handle_t *dst, private_handle_t *src);
+	int jpegEncoding(private_handle_t *dst, private_handle_t *src);
 };
 
 }; // namespace android

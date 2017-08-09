@@ -1,7 +1,7 @@
 #ifndef GLOBAL_DEF_H
 #define GLOBAL_DEF_H
 
-#define MAX_BUFFER_COUNT	8
+#define MAX_BUFFER_COUNT		8
 
 #ifdef BOARD_CAMERA_BACK_DEVICE
 #define BACK_CAMERA_DEVICE		BOARD_CAMERA_BACK_DEVICE
@@ -16,9 +16,9 @@
 #endif
 
 #ifdef BOARD_CAMERA_NUM
-#define NUM_OF_CAMERAS		BOARD_CAMERA_NUM
+#define NUM_OF_CAMERAS			BOARD_CAMERA_NUM
 #else
-#define NUM_OF_CAMERAS		1
+#define NUM_OF_CAMERAS			1
 #endif
 
 enum {

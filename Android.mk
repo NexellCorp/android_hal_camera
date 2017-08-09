@@ -26,7 +26,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libhardware \
 	libcamera_metadata \
 	libcamera_client \
-	libsync
+	libsync \
+	libNX_Jpeg
 LOCAL_C_INCLUDES += \
 	system/media/camera/include \
 	system/media/core/include \
@@ -35,6 +36,8 @@ LOCAL_C_INCLUDES += \
 	frameworks/native/include \
 	frameworks/av/include \
 	$(LOCAL_PATH)/../gralloc \
+	$(LOCAL_PATH)/../lib_jpeg \
+	external/libjpeg-turbo \
 	$(call include-path-for)
 
 include $(BUILD_SHARED_LIBRARY)
