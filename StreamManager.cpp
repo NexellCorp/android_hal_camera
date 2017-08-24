@@ -19,12 +19,6 @@ namespace android {
 #define dbg_stream(a...)
 #endif
 
-struct ycbcr_planar {
-    unsigned char *y;
-    unsigned char *cb;
-    unsigned char *cr;
-};
-
 int StreamManager::registerRequest(camera3_capture_request_t *r)
 {
 	const camera3_stream_buffer_t *previewBuffer = NULL;
@@ -453,12 +447,12 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 	int jpegBufSize;
 	char *jpegBuf;
 	camera3_jpeg_blob_t *jpegBlob;
-	struct ycbcr_planar planar;
-	planar.y = (unsigned char*)srcY.y;
-	planar.cb = (unsigned char*)srcY.cb;
-	planar.cr = (unsigned char*)srcY.cr;
+	unsigned char *planar[3];
+	planar[0] = (unsigned char*)srcY.y;
+	planar[1] = (unsigned char*)srcY.cb;
+	planar[2] = (unsigned char*)srcY.cr;
 	jpegSize = NX_JpegEncoding((unsigned char *)dstY, dst->size,
-					(unsigned char const *)&planar, src->width,
+					(unsigned char const *)planar, src->width,
 					src->height, srcY.ystride, srcY.cstride, 100,
 					NX_PIXFORMAT_YUV420);
 	if (jpegSize <= 0) {
