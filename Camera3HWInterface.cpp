@@ -13,6 +13,7 @@
 #include <hardware/camera3.h>
 #include <camera/CameraMetadata.h>
 
+#include "v4l2.h"
 #include "Camera3HWInterface.h"
 
 #define getPriv(dev) ((Camera3HWInterface *)(((camera3_device_t *)dev)->priv))
@@ -338,11 +339,22 @@ static int getNumberOfCameras(void)
 static int getCameraInfo(int camera_id, struct camera_info *info)
 {
 	int ret = 0;
+	int fd;
 
 	ALOGD("[%s] cameraID:%d", __func__, camera_id);
 
 	if (camera_id >= NUM_OF_CAMERAS || !info || (camera_id < 0))
 		return -ENODEV;
+
+	if (camera_id == 0)
+		fd = open(BACK_CAMERA_DEVICE, O_RDWR);
+	else
+		fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
+	if (fd < 0) {
+		ALOGE("Failed to open %s camera :%d",
+			(camera_id) ? "Front"  : "Back", fd);
+		return -ENODEV;
+	}
 
 	/* 0 = BACK, 1 = FRONT */
 	info->facing = camera_id ? CAMERA_FACING_FRONT : CAMERA_FACING_BACK;
@@ -357,13 +369,16 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 	info->conflicting_devices = NULL;
 	info->conflicting_devices_length = 0;
 
-	info->static_camera_characteristics = initStaticMetadata(camera_id);
+	info->static_camera_characteristics =
+		::android::android::initStaticMetadata(camera_id, fd);
 	ALOGI("======camera info =====\n");
 	ALOGI("camera facing = %s\n", info->facing ? "Front" : "Back");
 	ALOGI("device version = %d\n", info->device_version);
 	ALOGI("resource cost = %d\n", info->resource_cost);
 	ALOGI("conflicting devices is %s\n", info->conflicting_devices ? "exist"
 	      : "not exist");
+
+	close(fd);
 
 	return 0;
 }

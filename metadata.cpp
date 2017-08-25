@@ -1,4 +1,39 @@
-const camera_metadata_t *initStaticMetadata(int32_t camera_id)
+namespace android {
+
+#define MAX_SUPPORTED_RESOLUTION 64
+
+int32_t getMaxFps(uint32_t count, struct v4l2_frame_interval *f)
+{
+	uint32_t i;
+	uint32_t max = f[0].interval;
+
+	if (count == 1)
+		return max;
+
+	for (i = 1; i < count; i++) {
+		if (f[i].interval > f[i-1].interval)
+			max = f[i].interval;
+	}
+	return max;
+}
+
+int32_t getMaxJpegSize(uint32_t count, struct v4l2_frame_interval *f)
+{
+	uint32_t i;
+	uint32_t max = (f[0].width * f[0].height) * 3;
+
+	if (count == 1)
+		return max;
+
+	for (i = 1; i < count; i++) {
+		if ((f[i].width * f[i].height) > (f[i-1].width * f[i-1].height))
+			max = (f[i].width * f[i].height);
+	}
+	max *= max *3;
+	return max;
+}
+
+const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 {
 	CameraMetadata staticInfo;
 	const camera_metadata_t *meta;
@@ -57,19 +92,45 @@ const camera_metadata_t *initStaticMetadata(int32_t camera_id)
 	staticInfo.update(ANDROID_SENSOR_INFO_PHYSICAL_SIZE,
 			  physical_size, 2);
 
-	int32_t pixel_array_size[2] = {704, 480};
+	struct v4l2_frame_interval frames[MAX_SUPPORTED_RESOLUTION];
+	int ret = 0;
+	int r = 0;
+	while(!ret) {
+		if (r == MAX_SUPPORTED_RESOLUTION) {
+			ALOGE("supported resolutions count is bigger than MAX_SUPPORTED_RESOLUTION:%d",
+				MAX_SUPPORTED_RESOLUTION);
+			break;
+		}
+		frames[r].index = r;
+		ret = v4l2_get_frameinterval(fd, &frames[r]);
+		if (!ret) {
+			ALOGI("[%d] width:%d, height:%d, interval:%d",
+			      r, frames[r].width, frames[r].height,
+			      frames[r].interval);
+			r++;
+		}
+	}
+	ALOGD("[%s] supported resolutions count:%d", __func__, r);
+	if (!r) {
+		ALOGE("sensor resolution value is invalid");
+		return NULL;
+	}
+
+	/* pixel size for preview and still capture */
+	int32_t pixel_array_size[2] = {frames[0].width, frames[0].height};
 	staticInfo.update(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
 			  pixel_array_size, 2);
 	int32_t active_array_size[] = {0, 0, pixel_array_size[0],
 				      pixel_array_size[1]};
 	staticInfo.update(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE,
 			  active_array_size, 4);
-	/* AE Mode */
-	/* minimum fps duration is not checked in a camera framework */
-	int32_t available_fps_ranges[2] = {15, 30};
-	staticInfo.update(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES,
-			  available_fps_ranges, 2);
 
+	int32_t max_fps = getMaxFps(r, frames);
+	int32_t available_fps_ranges[2] = {15, max_fps};
+	staticInfo.update(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES,
+			  available_fps_ranges,
+			  sizeof(available_fps_ranges)/sizeof(int32_t));
+	/* AE Mode */
 	camera_metadata_rational exposureCompensationStep = {1, 1};
 	staticInfo.update(ANDROID_CONTROL_AE_COMPENSATION_STEP,
 			  &exposureCompensationStep, 1);
@@ -78,6 +139,7 @@ const camera_metadata_t *initStaticMetadata(int32_t camera_id)
 	staticInfo.update(ANDROID_CONTROL_AE_COMPENSATION_RANGE,
 			  exposureCompensationRange,
 			  sizeof(exposureCompensationRange)/sizeof(int32_t));
+	/* TODO: handle variation of sensor */
 	/* Format */
 	int32_t scaler_formats[] = {
 		HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED, /* 0x22: same to above */
@@ -88,61 +150,41 @@ const camera_metadata_t *initStaticMetadata(int32_t camera_id)
 	int fmt_count = sizeof(scaler_formats)/sizeof(int32_t);
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_FORMATS,
 			  scaler_formats, fmt_count);
+
 	/* TODO: handle variation of sensor */
-	int32_t available_stream_configs[] = {
-		scaler_formats[0],
-		pixel_array_size[0], pixel_array_size[1],
-		ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
-		scaler_formats[1],
-		pixel_array_size[0], pixel_array_size[1],
-		ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
-		scaler_formats[2],
-		pixel_array_size[0], pixel_array_size[1],
-		ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
-		scaler_formats[3],
-		pixel_array_size[0], pixel_array_size[1],
-		ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
-	};
+	/* check whether same format has serveral resolutions */
+	int array_size = fmt_count * 4 * r;
+	int32_t available_stream_configs[array_size];
+	int64_t available_stall_durations[array_size];
+	int64_t available_frame_min_durations[array_size];
+	for(int f = 0; f < fmt_count; f++) {
+		for (int j = 0; j < r ; j++) {
+			int offset = f*4*r + j*4;
+			ALOGD("[%s] f:%d, j:%d, r:%d, offset:%d", __func__, f, j, r, offset);
+			available_stream_configs[offset] = scaler_formats[f];
+			available_stream_configs[1+offset] = frames[j].width;
+			available_stream_configs[2+offset] = frames[j].height;
+			available_stream_configs[3+offset] = ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT;
+			available_stall_durations[offset] = scaler_formats[f];
+			available_stall_durations[1+offset] = frames[j].width;
+			available_stall_durations[2+offset] = frames[j].height;
+			available_stall_durations[3+offset] = available_fps_ranges[0];
+			available_frame_min_durations[offset] = scaler_formats[f];
+			available_frame_min_durations[1+offset] = frames[j].width;
+			available_frame_min_durations[2+offset] = frames[j].height;
+			available_frame_min_durations[3+offset] = available_fps_ranges[0];
+		}
+	}
+
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS,
 			  available_stream_configs,
-			  sizeof(available_stream_configs)/sizeof(int32_t));
-
-	int64_t available_stall_durations[] = {
-		scaler_formats[0],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0],
-		scaler_formats[1],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0],
-		scaler_formats[2],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0],
-		scaler_formats[3],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0]
-	};
+			  array_size);
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_STALL_DURATIONS,
 			  available_stall_durations,
-			  sizeof(available_stall_durations)/sizeof(int64_t));
-
-	/* android.scaler.availableMinFrameDurations */
-	int64_t available_frame_min_durations[] = {
-		scaler_formats[0],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0],
-		scaler_formats[1],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0],
-		scaler_formats[2],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0],
-		scaler_formats[3],
-		pixel_array_size[0], pixel_array_size[1],
-		available_fps_ranges[0]
-		};
+			  array_size);
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_MIN_FRAME_DURATIONS,
 			  available_frame_min_durations,
-			  sizeof(available_frame_min_durations)/sizeof(int64_t));
+			  array_size);
 
 	int32_t available_thumbnail_sizes[] = {
 		160, 120, /* width, height */
@@ -159,7 +201,7 @@ const camera_metadata_t *initStaticMetadata(int32_t camera_id)
 	/*
 	 * size = width * height for BLOB format * scaling factor
 	 */
-	int32_t jpegMaxSize = 704*480*3;
+	int32_t jpegMaxSize = getMaxJpegSize(r, frames);
 	staticInfo.update(ANDROID_JPEG_MAX_SIZE, &jpegMaxSize, 1);
 
 	uint8_t timestampSource = ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME;
@@ -311,3 +353,5 @@ const camera_metadata_t *initStaticMetadata(int32_t camera_id)
 	ALOGD("End initStaticMetadata");
 	return meta;
 }
+
+}; /*namespace android*/

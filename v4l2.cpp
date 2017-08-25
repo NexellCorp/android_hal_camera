@@ -119,4 +119,24 @@ int v4l2_streamoff(int fd)
 	return ioctl(fd, VIDIOC_STREAMOFF, &buf_type);
 }
 
+int v4l2_get_frameinterval(int fd, struct v4l2_frame_interval *f)
+{
+	struct v4l2_frmivalenum frame;
+	int ret;
+
+	ALOGD("[%s] index:%d", __func__, f->index);
+	frame.index = f->index;
+	ret = ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &frame);
+	if (!ret) {
+		f->width = frame.width;
+		f->height = frame.height;
+		f->interval = frame.discrete.numerator/
+				  frame.discrete.denominator;
+		ALOGD("index:%d, width:%d, height:%d, interval:%d",
+			f->index, f->width, f->height, f->interval);
+	} else
+		ALOGE("failed to get frame interval information :%d", ret);
+	return ret;
+}
+
 }; // namespace android
