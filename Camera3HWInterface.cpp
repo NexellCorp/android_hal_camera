@@ -186,77 +186,37 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 
 	ALOGV("[%s] type = %d", __func__, type);
 
-	/* TODO: Why static?
-	 * need to test non-static variable
-	 */
-	static const uint8_t requestType = ANDROID_REQUEST_TYPE_CAPTURE;
+	uint8_t requestType = ANDROID_REQUEST_TYPE_CAPTURE;
 	metaData.update(ANDROID_REQUEST_TYPE, &requestType, 1);
 
-	/* TODO: check need to static variable? */
 	int32_t defaultRequestID = 0;
 	metaData.update(ANDROID_REQUEST_ID, &defaultRequestID, 1);
 
 	uint8_t controlIntent = 0;
-	uint8_t focusMode;
-	uint8_t optStabMode;
-	uint8_t cacMode;
-	uint8_t edge_mode;
-	uint8_t noise_red_mode;
-	uint8_t tonemap_mode;
 
 	switch (type) {
 	case CAMERA3_TEMPLATE_PREVIEW:
 		ALOGV("[%s] CAMERA3_TEMPLATE_PREVIEW", __func__);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		edge_mode = ANDROID_EDGE_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
-		tonemap_mode = ANDROID_TONEMAP_MODE_FAST;
 		break;
 
 	case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
 		ALOGV("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG", __func__);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
-		edge_mode = ANDROID_EDGE_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
-		tonemap_mode = ANDROID_TONEMAP_MODE_HIGH_QUALITY;
 		break;
 
 	case CAMERA3_TEMPLATE_STILL_CAPTURE:
 		ALOGV("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE", __func__);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
-		edge_mode = ANDROID_EDGE_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
-		tonemap_mode = ANDROID_TONEMAP_MODE_HIGH_QUALITY;
 		break;
 
 	case CAMERA3_TEMPLATE_VIDEO_RECORD:
 		ALOGV("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD", __func__);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		edge_mode = ANDROID_EDGE_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
-		tonemap_mode = ANDROID_TONEMAP_MODE_FAST;
 		break;
 
 	case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		edge_mode = ANDROID_EDGE_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
-		tonemap_mode = ANDROID_TONEMAP_MODE_FAST;
 		break;
 
 	default:
@@ -266,38 +226,25 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	}
 
 	metaData.update(ANDROID_CONTROL_CAPTURE_INTENT, &controlIntent, 1);
-	metaData.update(ANDROID_COLOR_CORRECTION_ABERRATION_MODE, &cacMode, 1);
+
+	uint8_t focusMode = ANDROID_CONTROL_AF_MODE_OFF;
 	metaData.update(ANDROID_CONTROL_AF_MODE, &focusMode, 1);
-	metaData.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &optStabMode, 1);
-	metaData.update(ANDROID_TONEMAP_MODE, &tonemap_mode, 1);
-	metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noise_red_mode, 1);
-	metaData.update(ANDROID_EDGE_MODE, &edge_mode, 1);
 
 	/*flash */
-	static const uint8_t flashMode = ANDROID_FLASH_MODE_OFF;
+	uint8_t flashMode = ANDROID_FLASH_MODE_OFF;
 	metaData.update(ANDROID_FLASH_MODE, &flashMode, 1);
 
-	static const uint8_t aeLock = ANDROID_CONTROL_AE_LOCK_OFF;
-	metaData.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
-
-	static const uint8_t awbLock = ANDROID_CONTROL_AWB_LOCK_OFF;
-	metaData.update(ANDROID_CONTROL_AWB_LOCK, &awbLock, 1);
-
-	static const uint8_t awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+	uint8_t awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
 	metaData.update(ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
 
-	static const uint8_t controlMode = ANDROID_CONTROL_MODE_OFF;
+	uint8_t controlMode = ANDROID_CONTROL_MODE_OFF;
 	metaData.update(ANDROID_CONTROL_MODE, &controlMode, 1);
 
-	static const uint8_t effectMode = ANDROID_CONTROL_EFFECT_MODE_OFF;
+	uint8_t effectMode = ANDROID_CONTROL_EFFECT_MODE_OFF;
 	metaData.update(ANDROID_CONTROL_EFFECT_MODE, &effectMode, 1);
 
-	static const uint8_t aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+	uint8_t aeMode = ANDROID_CONTROL_AE_MODE_OFF;
 	metaData.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
-
-	static const uint8_t sceneMode =
-		ANDROID_CONTROL_SCENE_MODE_FACE_PRIORITY;
-	metaData.update(ANDROID_CONTROL_SCENE_MODE, &sceneMode, 1);
 
 	metaInfo = metaData.release();
 	return metaInfo;
@@ -380,8 +327,7 @@ static int getNumberOfCameras(void)
 	 * external camera will be notified
 	 * by camera_device_status_change callback
 	 */
-	/* TODO: need to get device camera information interface
-	 * Currently hard coded.
+	/*
 	 * TODO: need to implement a case when we support cameras more than 1
 	 * Currently only support one camera
 	 */
@@ -395,16 +341,17 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 
 	ALOGD("[%s] cameraID:%d", __func__, camera_id);
 
+	if (camera_id >= NUM_OF_CAMERAS || !info || (camera_id < 0))
+		return -ENODEV;
+
 	/* 0 = BACK, 1 = FRONT */
-	info->facing = camera_id ? CAMERA_FACING_FRONT :
-		CAMERA_FACING_BACK;
+	info->facing = camera_id ? CAMERA_FACING_FRONT : CAMERA_FACING_BACK;
 
 	/* The values is not available in the other case */
 	/* TODO: set orientation by camera sensor
 	 */
 	if (info->facing != CAMERA_FACING_EXTERNAL)
 		info->orientation = 0;
-
 	info->device_version = CAMERA_DEVICE_API_VERSION_3_4;
 	info->resource_cost = 100;
 	info->conflicting_devices = NULL;
@@ -443,8 +390,8 @@ static int cameraOpen(const struct hw_module_t *,
 		ALOGE("[%s] failed to create Camera3HWInterface", __func__);
 		return -ENOMEM;
 	}
-
 	*device = &camera3Hal->getCameraDevice()->common;
+
 	return 0;
 }
 
