@@ -18,7 +18,9 @@ endif
 LOCAL_SRC_FILES := \
 	Camera3HWInterface.cpp \
 	StreamManager.cpp \
-	v4l2.cpp
+	v4l2.cpp \
+	Exif.cpp \
+	ExifProcessor.cpp
 LOCAL_SHARED_LIBRARIES := \
 	liblog \
 	libcutils \

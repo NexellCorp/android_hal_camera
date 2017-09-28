@@ -7,7 +7,10 @@
 
 #include <libnxjpeg.h>
 
+#include <linux/videodev2.h>
 #include "v4l2.h"
+#include "Exif.h"
+#include "ExifProcessor.h"
 #include "StreamManager.h"
 
 namespace android {
@@ -19,18 +22,57 @@ namespace android {
 #define dbg_stream(a...)
 #endif
 
+int StreamManager::allocBuffer(uint32_t w, uint32_t h, buffer_handle_t **p)
+{
+	hw_device_t *dev = NULL;
+	alloc_device_t *device = NULL;
+	hw_module_t const *pmodule = NULL;
+	gralloc_module_t const *module = NULL;
+	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
+	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
+	int ret = 0, stride= 0;
+	buffer_handle_t *pHandle;
+
+	if (mDevice == NULL) {
+		module->common.methods->open(pmodule, GRALLOC_HARDWARE_GPU0, &dev);
+		if (ret) {
+			ALOGE("failed to open alloc device");
+			return -ENODEV;
+		}
+		device = reinterpret_cast<alloc_device_t *>(dev);
+		mDevice = device;
+	}
+
+	pHandle = (buffer_handle_t *)malloc(sizeof(buffer_handle_t));
+	if (pHandle == NULL)
+		return -ENOMEM;
+
+	ret = mDevice->alloc(mDevice, w, h, HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
+			    PROT_READ | PROT_WRITE, pHandle, &stride);
+	if (ret) {
+		ALOGE("failed to alloc a buffer:%d", ret);
+		return -EINVAL;
+	}
+
+	*p = pHandle;
+
+	return 0;
+}
+
 int StreamManager::registerRequest(camera3_capture_request_t *r)
 {
 	const camera3_stream_buffer_t *previewBuffer = NULL;
 	const camera3_stream_buffer_t *recordBuffer = NULL;
 	const camera3_stream_buffer_t *captureBuffer = NULL;
+	camera3_stream_buffer_t *prev = NULL;
 
 	dbg_stream("registerRequest --> num_output_buffers %d",
 			   r->num_output_buffers);
 
 	for (uint32_t i = 0; i < r->num_output_buffers; i++) {
 		const camera3_stream_buffer_t *b = &r->output_buffers[i];
-		if (b->status) {
+
+		if ((b == NULL) || (b->status)) {
 			ALOGE("buffer status is not valid to use: 0x%x", b->status);
 			return -EINVAL;
 		}
@@ -42,48 +84,86 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 			ALOGE("Invalid Buffer--> no fd");
 			return -EINVAL;
 		}
+		dbg_stream("format:%d, width:%d, height:%d, size:%d",
+			   ph->format, ph->width, ph->height, ph->size);
 
-		if (ph->format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
-			previewBuffer = b;
-		} else if (ph->format == HAL_PIXEL_FORMAT_YCbCr_420_888) {
-			/* TODO: assume video */
-			recordBuffer = b;
+		if (r->num_output_buffers == 1) {
+			if (ph->format == HAL_PIXEL_FORMAT_BLOB) {
+				prev = (camera3_stream_buffer_t *)malloc(sizeof(camera3_stream_buffer_t));
+				if (prev == NULL)
+					return -ENOMEM;
+				allocBuffer(704, 480, &prev->buffer);
+				if (prev->buffer == NULL) {
+					if (prev)
+						free(prev);
+					return -ENOMEM;
+				}
+				prev->stream = NULL;
+				previewBuffer = (const camera3_stream_buffer_t *)prev;
+				captureBuffer = b;
+			} else
+				previewBuffer = b;
 		} else {
-			dbg_stream("this formate:0x%x might be for video snapshot",
-					ph->format);
-			dbg_stream("width:%d, height:%d, size:%d",
-					ph->width, ph->height, ph->size);
-			captureBuffer = b;
+			if (ph->format == HAL_PIXEL_FORMAT_BLOB) {
+				dbg_stream("this format:0x%x might be for video snapshot or still capture",
+					   ph->format);
+				dbg_stream("width:%d, height:%d, size:%d",
+					   ph->width, ph->height, ph->size);
+				captureBuffer = b;
+			} else {
+				if (previewBuffer == NULL)
+					previewBuffer = b;
+				else if (recordBuffer == NULL)
+					recordBuffer = b;
+				else
+					captureBuffer = b;
+			}
 		}
 	}
 
 	if (previewBuffer != NULL) {
+
+		if (r->settings != NULL) {
+			CameraMetadata request;
+			request = r->settings;
+			if (request.exists(ANDROID_REQUEST_ID)) {
+				if (mPipeLineDepth == MAX_BUFFER_COUNT)
+					mPipeLineDepth = 1;
+				else
+					mPipeLineDepth++;
+			}
+			mMetaInfo = request.release();
+		}
+		dbg_stream("frame_number:%d", r->frame_number);
 		NXCamera3Buffer *buf = mFQ.dequeue();
 		if (!buf) {
 			ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
+			if ((mDevice) && (prev->buffer))
+				mDevice->free(mDevice, (buffer_handle_t)*prev->buffer);
+			if (prev)
+				free(prev);
 			return -ENOMEM;
 		}
 
-		if (recordBuffer == NULL)
-				buf->init(r->frame_number, previewBuffer->stream,
-					  previewBuffer->buffer);
-		else {
+		if (recordBuffer == NULL) {
 			if (captureBuffer == NULL)
-				buf->init(r->frame_number,
+				buf->init(r->frame_number, mMetaInfo, previewBuffer->stream,
+					  previewBuffer->buffer);
+			else
+				buf->init(r->frame_number, mMetaInfo,
+					  previewBuffer->stream, previewBuffer->buffer,
+					  NULL, NULL,
+					  captureBuffer->stream, captureBuffer->buffer);
+		} else {
+			if (captureBuffer == NULL)
+				buf->init(r->frame_number, mMetaInfo,
 					  previewBuffer->stream, previewBuffer->buffer,
 					  recordBuffer->stream, recordBuffer->buffer);
 			else
-				buf->init(r->frame_number,
+				buf->init(r->frame_number, mMetaInfo,
 					  previewBuffer->stream, previewBuffer->buffer,
 					  recordBuffer->stream, recordBuffer->buffer,
 					  captureBuffer->stream, captureBuffer->buffer);
-		}
-
-		CameraMetadata meta;
-		meta = r->settings;
-		if (meta.exists(ANDROID_CONTROL_AF_TRIGGER)) {
-			dbg_stream("This frame has trigger info");
-			buf->setTrigger(true);
 		}
 
 		dbg_stream("CREATE FN ---> %d", buf->getFrameNumber());
@@ -92,46 +172,55 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 
 		// if (!isRunning() && mQ.size() > 0)
 		if (!isRunning()) {
-			ALOGD("START Camera3PreviewThread");
+			dbg_stream("[DEBUG] START Camera3PreviewThread");
 			run(String8::format("Camera3PreviewThread"));
 		}
-	}
-	
+	} else
+		ALOGE("buffer is NULL");
+
+	if (prev)
+		free(prev);
+
 	return 0;
 }
 
 status_t StreamManager::readyToRun()
 {
 	NXCamera3Buffer *buf;
+	size_t bufferCount;
+
+	dbg_stream("%s", __func__);
 
 	buf = mQ.getHead();
 	private_handle_t *ph = buf->getPrivateHandle(PREVIEW_STREAM);
 	int ret = setBufferFormat(ph);
 	if (ret) {
 		ALOGE("Failed to setBufferFormat");
+		drainBuffer();
 		return ret;
 	}
 
 	ret = v4l2_req_buf(mFd, MAX_BUFFER_COUNT);
 	if (ret) {
 		ALOGE("Failed to req buf : %d\n", ret);
+		drainBuffer();
 		return ret;
 	}
 
-	size_t bufferCount = mQ.size();;
+	bufferCount = mQ.size();
 	for (size_t i = 0; i < bufferCount; i++) {
 		buf = mQ.dequeue();
 		dbg_stream("mQ.dequeue: %p", buf);
 		if (!buf) {
 			ALOGE("FATAL ERROR: Check Q!!!");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto fail;
 		}
-
 		int dma_fd = buf->getDmaFd(PREVIEW_STREAM);
 		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
 		if (ret) {
 			ALOGE("Failed to v4l2_qbuf for preview(index: %zu)", i);
-			return ret;
+			goto fail;
 		}
 
 		mRQ.queue(buf);
@@ -142,10 +231,19 @@ status_t StreamManager::readyToRun()
 	ret = v4l2_streamon(mFd);
 	if (ret) {
 		ALOGE("Failed to stream on:%d", ret);
-		return ret;
+		goto fail;
 	}
 
 	return NO_ERROR;
+
+fail:
+	dbg_stream("[DEBUG] failed to stream on:%d", ret);
+	drainBuffer();
+	ret = v4l2_req_buf(mFd, 0);
+	if (ret) {
+		ALOGE("Failed to req buf(line: %d): %d\n", __LINE__, ret);
+	}
+	return ret;
 }
 
 bool StreamManager::threadLoop()
@@ -153,24 +251,25 @@ bool StreamManager::threadLoop()
 	int dqIndex;
 	int fd;
 	int ret;
+	int qSize;
 
 	dbg_stream("[LOOP] mQ %zu, mRQ %zu", mQ.size(), mRQ.size());
 	if (mRQ.size() > 0) {
 		ret = v4l2_dqbuf(mFd, &dqIndex, &fd, 1);
 		if (ret) {
-			ALOGE("Failed to dqbuf for preview");
-			return false;
+			ALOGE("Failed to dqbuf for preview:%d", ret);
+			goto stop;
 		}
 		dbg_stream("dqIndex %d", dqIndex);
 
 		ret = sendResult();
 		if (ret) {
 			ALOGE("Failed to sendResult: %d", ret);
-			return false;
+			goto stop;
 		}
 	}
 
-	int qSize = mQ.size();
+	qSize = mQ.size();
 	if (qSize > 0) {
 		for (int i = 0; i < qSize; i++) {
 			NXCamera3Buffer *buf = mQ.dequeue();
@@ -179,7 +278,7 @@ bool StreamManager::threadLoop()
 			ret = v4l2_qbuf(mFd, mQIndex, &dma_fd, 1, &mSize);
 			if (ret) {
 				ALOGE("Failed to qbuf index %d", mQIndex);
-				return false;
+				goto stop;
 			}
 			dbg_stream("qbuf index %d", mQIndex);
 			mRQ.queue(buf);
@@ -195,6 +294,12 @@ bool StreamManager::threadLoop()
 	}
 
 	return true;
+
+stop:
+	dbg_stream("[DEBUG] StreamManager thread is stopped");
+	drainBuffer();
+	stopV4l2();
+	return false;
 }
 
 int StreamManager::setBufferFormat(private_handle_t *buf)
@@ -204,57 +309,484 @@ int StreamManager::setBufferFormat(private_handle_t *buf)
 	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
 	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
 	android_ycbcr ycbcr;
+	int ret;
 
 	ALOGD("[%s] fd:%d, ion_hnd:%p, size:%d, width:%d, height:%d, stride:%d",
 		  __func__, buf->share_fd, buf->ion_hnd, buf->size,
 		  buf->width, buf->height, buf->stride);
 
-	int ret = module->lock_ycbcr(module, buf, PROT_READ | PROT_WRITE, 0, 0,
-				     buf->width, buf->height, &ycbcr);
+	uint32_t num_planes = 3;
+	uint32_t strides[num_planes];
+	uint32_t sizes[num_planes];
+	uint32_t f;
+	mSize = 0;
+
+	ret = module->lock_ycbcr(module, buf, PROT_READ | PROT_WRITE, 0, 0,
+				 buf->width, buf->height, &ycbcr);
 	if (ret) {
 		ALOGE("failed to lock_ycbcr for the buf - %d", buf->share_fd);
 		return -EINVAL;
 	}
-
-	uint32_t num_planes = 3;
-	uint32_t y_width = buf->width;
-	uint32_t y_height = buf->height;
-	uint32_t strides[num_planes];
-	uint32_t sizes[num_planes];
-
 	ALOGD("[%s] ystride:%zu, cstride:%zu", __func__, ycbcr.ystride,
 	      ycbcr.cstride);
 
 	strides[0] = (uint32_t)ycbcr.ystride;
-	sizes[0] = (uint64_t)(ycbcr.cb) - (uint64_t)(ycbcr.y);
 	strides[1] = strides[2] = (uint32_t)ycbcr.cstride;
-	sizes[1] = sizes[2] = (uint64_t)ycbcr.cr - (uint64_t)ycbcr.cb;
-
-	mSize = 0;
+	if (buf->format == HAL_PIXEL_FORMAT_YV12) {
+		sizes[0] = (uint64_t)(ycbcr.cr) - (uint64_t)(ycbcr.y);
+		sizes[1] = sizes[2] = (uint64_t)ycbcr.cb - (uint64_t)ycbcr.cr;
+		f = V4L2_PIX_FMT_YVU420;
+		ALOGE("V4L2_PIX_FMT_YVU420");
+	} else {
+		sizes[0] = (uint64_t)(ycbcr.cb) - (uint64_t)(ycbcr.y);
+		sizes[1] = sizes[2] = (uint64_t)ycbcr.cr - (uint64_t)ycbcr.cb;
+		f = V4L2_PIX_FMT_YUV420;
+	}
 	for (uint32_t i = 0; i < num_planes; i++) {
 		ALOGD("[%d] mstrides = %d, sizes = %d\n",
 		      i, strides[i], sizes[i]);
 		mSize += sizes[i];
 	}
+
 	if (mSize != (uint32_t)buf->size) {
 	    ALOGE("[%s] invalid size:%d\n", __FUNCTION__, mSize);
 	    return -EINVAL;
 	}
 
-	ret = v4l2_set_format(mFd, buf->width, buf->height, num_planes,
-						  strides, sizes);
+	ret = v4l2_set_format(mFd, f, buf->width, buf->height,
+			      num_planes, strides, sizes);
 	if (ret) {
 		ALOGE("failed to set format : %d\n", ret);
 		return ret;
 	}
 
-	ret = module->unlock(module, buf);
-	if (ret) {
-		ALOGE("[%s] failed to gralloc unlock:%d\n", __FUNCTION__, ret);
-		return ret;
+	if (module != NULL) {
+		ret = module->unlock(module, buf);
+		if (ret) {
+			ALOGE("[%s] failed to gralloc unlock:%d\n", __FUNCTION__, ret);
+			return ret;
+		}
 	}
 
 	return 0;
+}
+
+camera_metadata_t*
+StreamManager::translateMetadata(const camera_metadata_t *request,
+				 uint32_t frame_number,
+				 nsecs_t timestamp,
+				 uint8_t pipeline_depth)
+{
+	CameraMetadata meta;
+	camera_metadata_t *result;
+	CameraMetadata metaData;
+
+	if (mExif == NULL)
+		mExif = new exif_attribute_t();
+
+	meta = request;
+
+	dbg_stream("[%s] frame_number:%d, timestamp:%ld, pipeline:%d", __func__,
+		   frame_number, timestamp, pipeline_depth);
+
+	if (meta.exists(ANDROID_REQUEST_ID)) {
+		int32_t request_id = meta.find(ANDROID_REQUEST_ID).data.i32[0];
+		metaData.update(ANDROID_REQUEST_ID, &request_id, 1);
+	}
+	metaData.update(ANDROID_SENSOR_TIMESTAMP, &timestamp, 1);
+	metaData.update(ANDROID_REQUEST_PIPELINE_DEPTH, &pipeline_depth, 1);
+
+	if (meta.exists(ANDROID_CONTROL_CAPTURE_INTENT)) {
+		uint8_t capture_intent =
+			meta.find(ANDROID_CONTROL_CAPTURE_INTENT).data.u8[0];
+		dbg_stream("capture_intent:%d", capture_intent);
+		metaData.update(ANDROID_CONTROL_CAPTURE_INTENT, &capture_intent, 1);
+	}
+
+	if (meta.exists(ANDROID_CONTROL_AE_TARGET_FPS_RANGE)) {
+		int32_t fps_range[2];
+		fps_range[0] = meta.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE).data.i32[0];
+		fps_range[1] = meta.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE).data.i32[1];
+		dbg_stream("ANDROID_CONTROL_AE_TARGET_FPS_RANGE-min:%d,max:%d",
+			   fps_range[0], fps_range[1]);
+		metaData.update(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, fps_range, 2);
+		#if 1
+		int64_t sensorFrameDuration = (long) 1e9/fps_range[1];
+		dbg_stream("ANDROID_SENSOR_FRAME_DURATION:%ld", sensorFrameDuration);
+		metaData.update(ANDROID_SENSOR_FRAME_DURATION, &sensorFrameDuration, 1);
+		#endif
+	}
+	if (meta.exists(ANDROID_CONTROL_AF_TRIGGER) &&
+	     meta.exists(ANDROID_CONTROL_AF_TRIGGER_ID)) {
+		uint8_t trigger = meta.find(ANDROID_CONTROL_AF_TRIGGER).data.u8[0];
+		int32_t trigger_id = meta.find(ANDROID_CONTROL_AF_TRIGGER_ID).data.i32[0];
+		uint8_t afState;
+
+		metaData.update(ANDROID_CONTROL_AF_TRIGGER, &trigger, 1);
+		if (trigger == ANDROID_CONTROL_AF_TRIGGER_START) {
+			dbg_stream("AF_TRIGGER_START");
+			afState = ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+		} else if (trigger == ANDROID_CONTROL_AF_TRIGGER_CANCEL) {
+			dbg_stream("AF_TRIGGER_CANCELL");
+			afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		} else {
+			dbg_stream("AF_TRIGGER_IDLE");
+			afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		}
+		dbg_stream("ANDROID_CONTROL_AF_STATE:%d", afState);
+		metaData.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AF_MODE)) {
+		uint8_t afMode = meta.find(ANDROID_CONTROL_AF_MODE).data.u8[0];
+		uint8_t afState;
+		dbg_stream("ANDROID_CONTROL_AF_MODE:%d", afMode);
+		if ((afMode == ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE) ||
+		    (afMode == ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO))
+			afMode = ANDROID_CONTROL_AF_MODE_OFF;
+		metaData.update(ANDROID_CONTROL_AF_MODE, &afMode, 1);
+		if (afMode == ANDROID_CONTROL_AF_MODE_OFF)
+			afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		else
+			afState = ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+		metaData.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION)) {
+		dbg_stream("ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION");
+		int32_t expCompensation =
+			meta.find(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION).data.i32[0];
+		metaData.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &expCompensation, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_MODE)) {
+		uint8_t metaMode = meta.find(ANDROID_CONTROL_MODE).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_MODE:%d", metaMode);
+		metaData.update(ANDROID_CONTROL_MODE, &metaMode, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_LOCK)) {
+		uint8_t aeLock = meta.find(ANDROID_CONTROL_AE_LOCK).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_AE_LOCK:%d", aeLock);
+		metaData.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_MODE)) {
+		uint8_t aeMode = meta.find(ANDROID_CONTROL_AE_MODE).data.u8[0];
+		uint8_t aeState = ANDROID_CONTROL_AE_STATE_CONVERGED;
+		//uint8_t aeState = ANDROID_CONTROL_AE_STATE_INACTIVE;
+		dbg_stream("ANDROID_CONTROL_AE_MODE:%d", aeMode);
+		if (aeMode != ANDROID_CONTROL_AE_MODE_OFF)
+			aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+		metaData.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
+		metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_ANTIBANDING_MODE)) {
+		uint8_t aeAntiBandingMode = meta.find(ANDROID_CONTROL_AE_ANTIBANDING_MODE).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_AE_ANTIBANDING_MODE:%d", aeAntiBandingMode);
+		metaData.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &aeAntiBandingMode, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER) &&
+		meta.exists(ANDROID_CONTROL_AE_PRECAPTURE_ID)) {
+		uint8_t trigger = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER).data.u8[0];
+		uint8_t trigger_id = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_ID).data.u8[0];
+		uint8_t aeState;
+
+		dbg_stream("ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER:%d, ID:%d", trigger, trigger_id);
+		metaData.update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &trigger, 1);
+		if (trigger == ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_START) {
+			aeState = ANDROID_CONTROL_AE_STATE_LOCKED;
+			//uint8_t aeState = ANDROID_CONTROL_AE_STATE_CONVERGED;
+			metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
+		} else {
+			aeState = ANDROID_CONTROL_AE_STATE_INACTIVE;
+			metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
+		}
+		dbg_stream("ANDROID_CONTROL_AE_STATE:%d", aeState);
+	}
+	if (meta.exists(ANDROID_CONTROL_AWB_LOCK)) {
+		uint8_t awbLock =
+			meta.find(ANDROID_CONTROL_AWB_LOCK).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_AWB_LOCK:%d", awbLock);
+		metaData.update(ANDROID_CONTROL_AWB_LOCK, &awbLock, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AWB_MODE)) {
+		uint8_t awbMode =
+			meta.find(ANDROID_CONTROL_AWB_MODE).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_AWB_MODE:%d", awbMode);
+		if (awbMode != ANDROID_CONTROL_AWB_MODE_OFF)
+			awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+		metaData.update(ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
+		uint8_t awbState = ANDROID_CONTROL_AWB_STATE_CONVERGED;
+		//uint8_t awbState = ANDROID_CONTROL_AWB_STATE_INACTIVE;
+		dbg_stream("ANDROID_CONTROL_AWB_STATE:%d", awbState);
+		metaData.update(ANDROID_CONTROL_AWB_STATE, &awbState, 1);
+		mExif->setWhiteBalance(awbMode);
+	}
+	if (meta.exists(ANDROID_CONTROL_SCENE_MODE)) {
+		uint8_t sceneMode = meta.find(ANDROID_CONTROL_SCENE_MODE).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_SCENE_MODE:%d", sceneMode);
+		metaData.update(ANDROID_CONTROL_SCENE_MODE, &sceneMode, 1);
+		mExif->setSceneCaptureType(sceneMode);
+	}
+	/*
+	if (meta.exists(ANDROID_COLOR_CORRECTION_MODE)) {
+		uint8_t colorCorrectMode =
+			meta.find(ANDROID_COLOR_CORRECTION_MODE).data.u8[0];
+		dbg_stream("ANDROID_COLOR_CORRECTION_MODE:%d", colorCorrectMode);
+		metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorCorrectMode, 1);
+	}
+	*/
+	if (meta.exists(ANDROID_COLOR_CORRECTION_ABERRATION_MODE)) {
+		uint8_t colorCorrectAbeMode =
+			meta.find(ANDROID_COLOR_CORRECTION_ABERRATION_MODE).data.u8[0];
+		dbg_stream("ANDROID_COLOR_CORRECTION_ABERRATION_MODE:%d", colorCorrectAbeMode);
+		metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorCorrectAbeMode, 1);
+	}
+	if (meta.exists(ANDROID_FLASH_MODE)) {
+		uint8_t flashMode = meta.find(ANDROID_FLASH_MODE).data.u8[0];
+		uint8_t flashState = ANDROID_FLASH_STATE_UNAVAILABLE;
+		dbg_stream("ANDROID_FLASH_MODE:%d", flashMode);
+		if (flashMode != ANDROID_FLASH_MODE_OFF)
+			flashState = ANDROID_FLASH_STATE_READY;
+		dbg_stream("ANDROID_FLASH_STATE:%d", flashState);
+		metaData.update(ANDROID_FLASH_STATE, &flashState, 1);
+		metaData.update(ANDROID_FLASH_MODE, &flashMode, 1);
+		mExif->setFlashMode(flashMode);
+	}
+	/*
+	if (meta.exists(ANDROID_EDGE_MODE)) {
+		uint8_t edgeMode = meta.find(ANDROID_EDGE_MODE).data.u8[0];
+		dbg_stream("ANDROID_EDGE_MODE:%d", edgeMode);
+		metaData.update(ANDROID_EDGE_MODE, &edgeMode, 1);
+	}
+	if (meta.exists(ANDROID_HOT_PIXEL_MODE)) {
+		uint8_t hotPixelMode =
+			meta.find(ANDROID_HOT_PIXEL_MODE).data.u8[0];
+		dbg_stream("ANDROID_HOT_PIXEL_MODE:%d", hotPixelMode);
+		metaData.update(ANDROID_HOT_PIXEL_MODE, &hotPixelMode, 1);
+	}
+	*/
+	if (meta.exists(ANDROID_LENS_FOCAL_LENGTH)) {
+		float focalLength =
+			meta.find(ANDROID_LENS_FOCAL_LENGTH).data.f[0];
+		dbg_stream("ANDROID_LENS_FOCAL_LENGTH:%f", focalLength);
+		metaData.update(ANDROID_LENS_FOCAL_LENGTH, &focalLength, 1);
+		rational_t focal_length;
+		focal_length.num = (uint32_t)(focalLength * EXIF_DEF_FOCAL_LEN_DEN);
+		focal_length.den = EXIF_DEF_FOCAL_LEN_DEN;
+		mExif->setFocalLength(focal_length);
+	}
+	if (meta.exists(ANDROID_LENS_OPTICAL_STABILIZATION_MODE)) {
+		uint8_t optStabMode =
+			meta.find(ANDROID_LENS_OPTICAL_STABILIZATION_MODE).data.u8[0];
+		dbg_stream("ANDROID_LENS_OPTICAL_STABILIZATION_MODE:%d", optStabMode);
+		metaData.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &optStabMode, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE)) {
+		uint8_t vsMode = meta.find(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_VIDEO_STABILIZATION_MODE:%d", vsMode);
+		metaData.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vsMode, 1);
+	}
+	if (meta.exists(ANDROID_NOISE_REDUCTION_MODE)) {
+		uint8_t noiseRedMode =
+			meta.find(ANDROID_NOISE_REDUCTION_MODE).data.u8[0];
+		dbg_stream("ANDROID_NOISE_REDUCTION_MODE:%d", noiseRedMode);
+		metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noiseRedMode, 1);
+	}
+	if (meta.exists(ANDROID_SCALER_CROP_REGION)) {
+		int32_t scalerCropRegion[4];
+		scalerCropRegion[0] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[0];
+		scalerCropRegion[1] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[1];
+		scalerCropRegion[2] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[2];
+		scalerCropRegion[3] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[3];
+		dbg_stream("ANDROID_SCALER_CROP_REGION:left-%d,top-%d,width-%d,height-%d",
+			   scalerCropRegion[0], scalerCropRegion[1], scalerCropRegion[2],
+			   scalerCropRegion[3]);
+		metaData.update(ANDROID_SCALER_CROP_REGION, scalerCropRegion, 4);
+	}
+	if (meta.exists(ANDROID_SENSOR_EXPOSURE_TIME)) {
+		 int64_t sensorExpTime =
+			meta.find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
+		dbg_stream("ANDROID_SENSOR_EXPOSURE_TIME:%ld", sensorExpTime);
+		metaData.update(ANDROID_SENSOR_EXPOSURE_TIME, &sensorExpTime, 1);
+		mExif->setExposureTime(sensorExpTime);
+	}
+	#if 0
+	if (meta.exists(ANDROID_SENSOR_FRAME_DURATION)) {
+		int64_t sensorFrameDuration =
+			meta.find(ANDROID_SENSOR_FRAME_DURATION).data.i64[0];
+		dbg_stream("ANDROID_SENSOR_FRAME_DURATION:%ld", sensorFrameDuration);
+		metaData.update(ANDROID_SENSOR_FRAME_DURATION, &sensorFrameDuration, 1);
+	}
+	#endif
+	/*
+	if (meta.exists(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW)) {
+		int64_t sensorRollingShutterSkew =
+			meta.find(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW).data.i64[0];
+		dbg_stream("ANDROID_SENSOR_ROLLING_SHUTTER_SKEW:%ld", sensorRollingShutterSkew);
+		metaData.update(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW, &sensorRollingShutterSkew, 1);
+	}
+	*/
+	if (meta.exists(ANDROID_SHADING_MODE)) {
+		uint8_t  shadingMode =
+			meta.find(ANDROID_SHADING_MODE).data.u8[0];
+		dbg_stream("ANDROID_SHADING_MODE:%d", shadingMode);
+		metaData.update(ANDROID_SHADING_MODE, &shadingMode, 1);
+	}
+	if (meta.exists(ANDROID_STATISTICS_FACE_DETECT_MODE)) {
+		uint8_t fwk_facedetectMode =
+			meta.find(ANDROID_STATISTICS_FACE_DETECT_MODE).data.u8[0];
+		dbg_stream("ANDROID_STATISTICS_FACE_DETECT_MODE:%d", fwk_facedetectMode);
+		metaData.update(ANDROID_STATISTICS_FACE_DETECT_MODE, &fwk_facedetectMode, 1);
+	}
+	if (meta.exists(ANDROID_STATISTICS_LENS_SHADING_MAP)) {
+		uint8_t sharpnessMapMode =
+			meta.find(ANDROID_STATISTICS_LENS_SHADING_MAP).data.u8[0];
+		dbg_stream("ANDROID_STATISTICS_LENS_SHADING_MAP:%d", sharpnessMapMode);
+		metaData.update(ANDROID_STATISTICS_LENS_SHADING_MAP, &sharpnessMapMode, 1);
+	}
+	#if 0
+	if (meta.exists(ANDROID_COLOR_CORRECTION_GAINS)) {
+		float colorCorrectGains[4];
+		colorCorrectGains[0] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[0];
+		colorCorrectGains[1] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[1];
+		colorCorrectGains[2] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[2];
+		colorCorrectGains[3] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[3];
+		dbg_stream("ANDROID_COLOR_CORRECTION_GAINS-ColorGain:%f,%f,%f,%f",
+			   colorCorrectGains[0], colorCorrectGains[1], colorCorrectGains[2],
+			   colorCorrectGains[3]);
+		metaData.update(ANDROID_COLOR_CORRECTION_GAINS, colorCorrectGains, 4);
+	}
+	if (meta.exists(ANDROID_COLOR_CORRECTION_TRANSFORM)) {
+		camera_metadata_rational_t ccTransform[9];
+		ccTransform[0].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[0].numerator;
+		ccTransform[0].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[0].denominator;
+		ccTransform[1].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[1].numerator;
+		ccTransform[1].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[1].denominator;
+		ccTransform[2].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[2].numerator;
+		ccTransform[2].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[2].denominator;
+		ccTransform[3].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[3].numerator;
+		ccTransform[3].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[3].denominator;
+		ccTransform[4].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[4].numerator;
+		ccTransform[4].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[4].denominator;
+		ccTransform[5].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[5].numerator;
+		ccTransform[5].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[5].denominator;
+		ccTransform[6].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[6].numerator;
+		ccTransform[6].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[6].denominator;
+		ccTransform[7].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[7].numerator;
+		ccTransform[7].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[7].denominator;
+		ccTransform[8].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[8].numerator;
+		ccTransform[8].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[8].denominator;
+		dbg_stream("ANDROID_COLOR_CORRECTION_TRANSFORM:%d/%d, %d/%d, %d/%d",
+			   ccTransform[0].numerator/ccTransform[0].denominator,
+			   ccTransform[1].numerator/ccTransform[1].denominator,
+			   ccTransform[2].numerator/ccTransform[2].denominator,
+			   ccTransform[3].numerator/ccTransform[0].denominator,
+			   ccTransform[4].numerator/ccTransform[1].denominator,
+			   ccTransform[5].numerator/ccTransform[2].denominator,
+			   ccTransform[6].numerator/ccTransform[0].denominator,
+			   ccTransform[7].numerator/ccTransform[1].denominator,
+			   ccTransform[8].numerator/ccTransform[2].denominator);
+		metaData.update(ANDROID_COLOR_CORRECTION_TRANSFORM, ccTransform, 9);
+	}
+	#endif
+	if (meta.exists(ANDROID_CONTROL_EFFECT_MODE)) {
+		uint8_t fwk_effectMode =
+			meta.find(ANDROID_CONTROL_EFFECT_MODE).data.u8[0];
+		dbg_stream("ANDROID_CONTROL_EFFECT_MODE:%d", fwk_effectMode);
+		metaData.update(ANDROID_CONTROL_EFFECT_MODE, &fwk_effectMode, 1);
+	}
+	if (meta.exists(ANDROID_SENSOR_TEST_PATTERN_MODE)) {
+		int32_t fwk_testPatternMode =
+			meta.find(ANDROID_SENSOR_TEST_PATTERN_MODE).data.i32[0];
+		dbg_stream("ANDROID_SENSOR_TEST_PATTERN_MODE:%d", fwk_testPatternMode);
+		metaData.update(ANDROID_SENSOR_TEST_PATTERN_MODE, &fwk_testPatternMode, 1);
+	}
+	if (meta.exists(ANDROID_JPEG_ORIENTATION)) {
+		int32_t orientation =
+			meta.find(ANDROID_JPEG_ORIENTATION).data.i32[0];
+		dbg_stream("ANDROID_JPEG_ORIENTATION:%d", orientation);
+		metaData.update(ANDROID_JPEG_ORIENTATION, &orientation, 1);
+		int32_t exifOri;
+		if (orientation == 90)
+			exifOri = EXIF_ORIENTATION_90;
+		else if(orientation == 180)
+			exifOri = EXIF_ORIENTATION_180;
+		else if(orientation == 270)
+			exifOri = EXIF_ORIENTATION_270;
+		else
+			exifOri = EXIF_ORIENTATION_UP;
+		mExif->setOrientation(exifOri);
+	}
+	if (meta.exists(ANDROID_JPEG_QUALITY)) {
+		uint8_t quality =
+			meta.find(ANDROID_JPEG_QUALITY).data.u8[0];
+		dbg_stream("ANDROID_JPEG_QUALITY:%d", quality);
+		metaData.update(ANDROID_JPEG_QUALITY, &quality, 1);
+	}
+	if (meta.exists(ANDROID_JPEG_THUMBNAIL_QUALITY)) {
+		uint8_t thumb_quality =
+			meta.find(ANDROID_JPEG_THUMBNAIL_QUALITY).data.u8[0];
+		dbg_stream("ANDROID_JPEG_THUMBNAIL_QUALITY:%d", thumb_quality);
+		metaData.update(ANDROID_JPEG_THUMBNAIL_QUALITY, &thumb_quality, 1);
+		mExif->setThumbnailQuality(thumb_quality);
+	}
+	if (meta.exists(ANDROID_JPEG_THUMBNAIL_SIZE)) {
+		int32_t orientation = 0;
+		int32_t size[2];
+		size[0] = meta.find(ANDROID_JPEG_THUMBNAIL_SIZE).data.i32[0];
+		size[1] = meta.find(ANDROID_JPEG_THUMBNAIL_SIZE).data.i32[1];
+		dbg_stream("ANDROID_JPEG_THUMBNAIL_SIZE- width:%d, height:%d",
+			   size[0], size[1]);
+
+		if (meta.exists(ANDROID_JPEG_ORIENTATION)) {
+			orientation = meta.find(ANDROID_JPEG_ORIENTATION).data.i32[0];
+			dbg_stream("ANDROID_JPEG_ORIENTATION:%d", orientation);
+			metaData.update(ANDROID_JPEG_ORIENTATION, &orientation, 1);
+		}
+		if ((orientation == 90) || (orientation == 270)) {
+			int32_t temp = size[0];
+			size[0] = size[1];
+			size[1] = temp;
+		}
+		metaData.update(ANDROID_JPEG_THUMBNAIL_SIZE, size, 2);
+		//mExif->setThumbResolution(size[0], size[1]);
+	}
+	/*
+	if (meta.exists(ANDROID_JPEG_GPS_LOCATION)) {
+		dbg_stream("ANDROID_JPEG_GPS_LOCATION");
+	}
+	*/
+
+	if (meta.exists(ANDROID_JPEG_GPS_COORDINATES)) {
+		dbg_stream("ANDROID_JPEG_GPS_COORDINATES");
+		mExif->setGpsCoordinates(meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d);
+	}
+
+	if (meta.exists(ANDROID_JPEG_GPS_PROCESSING_METHOD)) {
+		dbg_stream("ANDROID_JPEG_GPS_PROCESSING_METHOD");
+		mExif->setGpsProcessingMethod(meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
+					      meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
+	}
+
+	if (meta.exists(ANDROID_JPEG_GPS_TIMESTAMP)) {
+		dbg_stream("ANDROID_JPEG_GPS_TIMESTAMP");
+		mExif->setGpsTimestamp(meta.find(ANDROID_JPEG_GPS_TIMESTAMP).data.i64[0]);
+	}
+
+	if (meta.exists(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE)) {
+		uint8_t shadingMode =
+			meta.find(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE).data.u8[0];
+		dbg_stream("ANDROID_STATISTICS_LENS_SHADING_MAP_MODE:%d", shadingMode);
+		metaData.update(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE, &shadingMode, 1);
+	}
+	/*
+	if (meta.exists(ANDROID_STATISTICS_SCENE_FLICKER)) {
+		uint8_t sceneFlicker =
+			meta.find(ANDROID_STATISTICS_SCENE_FLICKER).data.u8[0];
+		dbg_stream("ANDROID_STATISTICS_SCENE_FLICKER:%d", sceneFlicker);
+		metaData.update(ANDROID_STATISTICS_SCENE_FLICKER, &sceneFlicker, 1);
+	}
+	*/
+	result = metaData.release();
+
+	return result;
 }
 
 int StreamManager::sendResult(bool drain)
@@ -277,6 +809,7 @@ int StreamManager::sendResult(bool drain)
 
 	/* notify */
 	nsecs_t	timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
+	ALOGD("%[timestamp] %lld", timestamp);
 	camera3_notify_msg_t msg;
 	memset(&msg, 0x0, sizeof(camera3_notify_msg_t));
 	msg.type = CAMERA3_MSG_SHUTTER;
@@ -286,57 +819,66 @@ int StreamManager::sendResult(bool drain)
 
 	/* send result */
 	camera3_capture_result_t result;
-	CameraMetadata metaData;
 
 	bzero(&result, sizeof(camera3_capture_result_t));
 
 	result.frame_number = buf->getFrameNumber();
-	result.num_output_buffers = 1;
+	result.num_output_buffers = 0;
+	result.result = translateMetadata(buf->getMetadata(),
+					  result.frame_number,
+					  timestamp, mPipeLineDepth);
 
 	camera3_stream_buffer_t output_buffer[MAX_STREAM];
-	output_buffer[0].stream = buf->getStream(PREVIEW_STREAM);
-	output_buffer[0].buffer = buf->getBuffer(PREVIEW_STREAM);
-	output_buffer[0].release_fence = -1;
-	output_buffer[0].acquire_fence = -1;
-	output_buffer[0].status = 0;
+	uint32_t index = 0;
+
+	if (buf->getStream(PREVIEW_STREAM) != NULL) {
+		output_buffer[index].stream = buf->getStream(PREVIEW_STREAM);
+		output_buffer[index].buffer = buf->getBuffer(PREVIEW_STREAM);
+		output_buffer[index].release_fence = -1;
+		output_buffer[index].acquire_fence = -1;
+		output_buffer[index].status = 0;
+		index++;
+		result.num_output_buffers++;
+	}
 
 	if (buf->getStream(RECORD_STREAM) != NULL) {
 		if (!drain) {
 			copyBuffer(buf->getPrivateHandle(RECORD_STREAM),
-					buf->getPrivateHandle(PREVIEW_STREAM));
+				   buf->getPrivateHandle(PREVIEW_STREAM));
 		}
+		output_buffer[index].stream = buf->getStream(RECORD_STREAM);
+		output_buffer[index].buffer = buf->getBuffer(RECORD_STREAM);
+		output_buffer[index].release_fence = -1;
+		output_buffer[index].acquire_fence = -1;
+		output_buffer[index].status = 0;
+		index++;
 		result.num_output_buffers++;
-		output_buffer[1].stream = buf->getStream(RECORD_STREAM);
-		output_buffer[1].buffer = buf->getBuffer(RECORD_STREAM);
-		output_buffer[1].release_fence = -1;
-		output_buffer[1].acquire_fence = -1;
-		output_buffer[1].status = 0;
+	}
 
-		if (buf->getStream(CAPTURE_STREAM) != NULL) {
-			dbg_stream("jpeg encoding for video snapshot:%d", drain);
-			if (!drain)
+	if (buf->getStream(CAPTURE_STREAM) != NULL) {
+		if (!drain) {
+			if (buf->getFormat(CAPTURE_STREAM) == HAL_PIXEL_FORMAT_BLOB)
 				jpegEncoding(buf->getPrivateHandle(CAPTURE_STREAM),
-						buf->getPrivateHandle(RECORD_STREAM));
-			result.num_output_buffers++;
-			output_buffer[2].stream = buf->getStream(CAPTURE_STREAM);
-			output_buffer[2].buffer = buf->getBuffer(CAPTURE_STREAM);
-			output_buffer[2].release_fence = -1;
-			output_buffer[2].acquire_fence = -1;
-			output_buffer[2].status = 0;
+					     buf->getPrivateHandle(PREVIEW_STREAM));
+			else
+				copyBuffer(buf->getPrivateHandle(CAPTURE_STREAM),
+					   buf->getPrivateHandle(PREVIEW_STREAM));
 		}
+		output_buffer[index].stream = buf->getStream(CAPTURE_STREAM);
+		output_buffer[index].buffer = buf->getBuffer(CAPTURE_STREAM);
+		output_buffer[index].release_fence = -1;
+		output_buffer[index].acquire_fence = -1;
+		output_buffer[index].status = 0;
+		index++;
+		result.num_output_buffers++;
+	}
+
+	if (buf->getStream(PREVIEW_STREAM) == NULL) {
+		mDevice->free(mDevice, (buffer_handle_t)*buf->getBuffer(PREVIEW_STREAM));
+		free(buf->getBuffer(PREVIEW_STREAM));
 	}
 
 	result.output_buffers = output_buffer;
-
-	metaData.update(ANDROID_SENSOR_TIMESTAMP, &timestamp, 1);
-	if (buf->haveTrigger()) {
-		uint8_t ae_state = (uint8_t)ANDROID_CONTROL_AE_STATE_CONVERGED;
-		metaData.update(ANDROID_CONTROL_AE_STATE, &ae_state, 1);
-		uint8_t afState = (uint8_t)ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
-		metaData.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
-	}
-	result.result = metaData.release();
-
 	/*
          * If we set 'ANDROID_REQUEST_PARTIAL_RESULT_COUNT' to metadata
          * pratial_result should be same as the value
@@ -359,7 +901,7 @@ int StreamManager::sendResult(bool drain)
 
 void StreamManager::stopStreaming()
 {
-	dbg_stream("stopStreaming: E");
+	dbg_stream("[DEBUG] stopStreaming: E");
 	// wait until all buffer drained
 	while (!mQ.isEmpty() || !mRQ.isEmpty()) {
 		ALOGD("Wait buffer drained");
@@ -367,7 +909,7 @@ void StreamManager::stopStreaming()
 	}
 
 	if (isRunning()) {
-		dbg_stream("%s --> requestExitAndWait E", __func__);
+		dbg_stream("[DEBUG] %s --> requestExitAndWait E", __func__);
 		requestExitAndWait();
 		dbg_stream("%s --> requestExitAndWait X", __func__);
 	}
@@ -392,7 +934,6 @@ void StreamManager::stopV4l2()
 	ret = v4l2_req_buf(mFd, 0);
 	if (ret)
 		ALOGE("Failed to req buf(line: %d): %d\n", __LINE__, ret);
-
 	mQIndex = 0;
 
 	dbg_stream("stopV4l2: X");
@@ -400,6 +941,8 @@ void StreamManager::stopV4l2()
 
 void StreamManager::drainBuffer()
 {
+	int ret;
+
 	dbg_stream("start draining all RQ buffers");
 
 	// Mutex::Autolock l(mLock);
@@ -426,7 +969,7 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 	dbg_stream("start jpegEncoding");
 
 	dstY = mmap(0, dst->size, PROT_READ | PROT_WRITE, MAP_SHARED,
-			dst->share_fd, 0);
+		    dst->share_fd, 0);
 	if (MAP_FAILED == dstY) {
 		ALOGE("failed to mmap for dstY");
 		return -EINVAL;
@@ -443,6 +986,18 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 	dbg_stream("src: %p(%d) --> dst: %p(%d)", srcY.y, src->size,
 			   dstY, dst->size);
 
+	/* make exif */
+	ExifProcessor *exifProcessor = new ExifProcessor();
+	ExifProcessor::ExifResult result =
+		exifProcessor->makeExif(src->width, src->height, src, mExif, dst);
+	int exifSize = result.getSize();
+	if (!exifSize) {
+		ALOGE("failed to make Exif");
+		ret = -EINVAL;
+		goto unlock;
+	}
+	dbg_stream("[DEBUG] Exif size:%d", exifSize);
+
 	int jpegSize;
 	int jpegBufSize;
 	char *jpegBuf;
@@ -451,7 +1006,7 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 	planar[0] = (unsigned char*)srcY.y;
 	planar[1] = (unsigned char*)srcY.cb;
 	planar[2] = (unsigned char*)srcY.cr;
-	jpegSize = NX_JpegEncoding((unsigned char *)dstY, dst->size,
+	jpegSize = NX_JpegEncoding((unsigned char *)dstY+exifSize, src->size,
 					(unsigned char const *)planar, src->width,
 					src->height, srcY.ystride, srcY.cstride, 100,
 					NX_PIXFORMAT_YUV420);
@@ -460,16 +1015,17 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 		ret = -EINVAL;
 		goto unlock;
 	}
+	memcpy((unsigned char*)dstY+exifSize, (unsigned char*)dstY+exifSize+2/*SOI*/, jpegSize-2);
 
 	jpegBufSize = dst->size;
-	jpegBuf = (char *)dstY;
+	jpegBuf = (char *) dstY;
+	dbg_stream("[DEBUG] dst:%p, jpegBuf:%p", dstY, jpegBuf);
 	jpegBlob = (camera3_jpeg_blob_t *)(&jpegBuf[jpegBufSize -
 						sizeof(camera3_jpeg_blob_t)]);
-	jpegBlob->jpeg_size = jpegSize;
+	jpegBlob->jpeg_size = jpegSize + exifSize;
 	jpegBlob->jpeg_blob_id = CAMERA3_JPEG_BLOB_ID;
-	ALOGD("capture success: jpegSize(%d), totalSize(%d)",
+	ALOGD("[DEBUG] capture success: jpegSize(%d), totalSize(%d)",
 		jpegSize, jpegBlob->jpeg_size);
-
 	ret = 0;
 
 unlock:
@@ -515,7 +1071,8 @@ int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)
 			   dstY.y, dst->size);
 
 	if ((src->width == dst->width) && (src->height == dst->height)) {
-		if ((srcY.ystride == dstY.ystride) && (srcY.cstride == dstY.cstride))
+		if ((src->format == dst->format) && (srcY.ystride == dstY.ystride) &&
+		   (srcY.cstride == dstY.cstride))
 			memcpy(dstY.y, srcY.y, src->size);
 		else {
 			dbg_stream("src and dst buffer has a different alingment");

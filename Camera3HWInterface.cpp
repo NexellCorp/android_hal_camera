@@ -22,6 +22,8 @@ namespace android {
 
 #include "metadata.cpp"
 
+const camera_metadata_t *gStaticMetadata[NUM_OF_CAMERAS] = {0, };
+
 /**
  * Camera3 callback ops
  */
@@ -121,15 +123,14 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 
 Camera3HWInterface::~Camera3HWInterface(void)
 {
-	if (mPreviewHandle > 0)
-		close(mPreviewHandle);
-
 	ALOGI("[%s] destroyed", __func__);
 }
 
 int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 {
 	int fd;
+
+	ALOGD("[%s] mCameraId:%d", __func__, mCameraId);
 
 	if (mCameraId == 0)
 		fd = open(BACK_CAMERA_DEVICE, O_RDWR);
@@ -143,6 +144,11 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 	mPreviewHandle = fd;
 
 	mCallbacks = callback;
+	for (int j = 0; j < CAMERA3_TEMPLATE_MANUAL; j++) {
+		mRequestMetadata[j] = NULL;
+		ALOGD("mRequestMetadata[%d] = %p\n", j, mRequestMetadata[j]);
+	}
+
 	return 0;
 }
 
@@ -153,7 +159,8 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 		return -EINVAL;
 	}
 
-	ALOGV("[%s] num_streams:%d", __func__, stream_list->num_streams);
+	ALOGD("[%s] operation_mode:%d, num_streams:%d", __func__,
+	      stream_list->operation_mode, stream_list->num_streams);
 	for (size_t i = 0; i < stream_list->num_streams; i++) {
 		camera3_stream_t *new_stream = stream_list->streams[i];
 
@@ -172,20 +179,41 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 			new_stream->max_buffers = MAX_BUFFER_COUNT;
 		}
 		ALOGD("[%s] stream type = %d, max_buffer = %d",
-			  __func__, new_stream->stream_type,
-			  new_stream->max_buffers);
+			  __func__, new_stream->stream_type, new_stream->max_buffers);
+	}
+	/* stop is implicit */
+	if (mPreviewManager != NULL) {
+		ALOGD("[DEBUG] del Stream");
+		ALOGD("==================================================");
+		mPreviewManager->stopStreaming();
+		// TODO: check destructor
+		mPreviewManager = NULL;
 	}
 
+	if (mPreviewManager == NULL) {
+		ALOGD("[DEBUG] new Stream");
+		ALOGD("==================================================");
+		mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks);
+		if (mPreviewManager == NULL) {
+			ALOGE("Failed to construct StreamManager for preview");
+			return -ENOMEM;
+		}
+	}
 	return 0;
 }
 
 const camera_metadata_t*
 Camera3HWInterface::constructDefaultRequestSettings(int type)
 {
-	CameraMetadata metaData;
-	camera_metadata_t *metaInfo;
+	ALOGD("[%s] type = %d", __func__, type);
 
-	ALOGV("[%s] type = %d", __func__, type);
+
+	if (mRequestMetadata[type-1] != NULL) {
+		ALOGD("mRequestMetadata for %d is already exist", type);
+		return mRequestMetadata[type-1];
+	}
+
+	CameraMetadata metaData;
 
 	uint8_t requestType = ANDROID_REQUEST_TYPE_CAPTURE;
 	metaData.update(ANDROID_REQUEST_TYPE, &requestType, 1);
@@ -194,66 +222,271 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	metaData.update(ANDROID_REQUEST_ID, &defaultRequestID, 1);
 
 	uint8_t controlIntent = 0;
+	uint8_t antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
+	uint8_t awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+	uint8_t awbLock = ANDROID_CONTROL_AWB_LOCK_OFF;
+	uint8_t controlMode = ANDROID_CONTROL_MODE_OFF;
+	uint8_t aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+	uint8_t aeLock = ANDROID_CONTROL_AE_LOCK_OFF;
+	uint8_t focusMode = ANDROID_CONTROL_AF_MODE_OFF;
+	uint8_t	edge_mode = ANDROID_EDGE_MODE_FAST;
+	uint8_t	colorMode = ANDROID_COLOR_CORRECTION_MODE_FAST;
+	uint8_t vsMode = ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
+	uint8_t optStabMode;
+	uint8_t cacMode;
+	uint8_t noise_red_mode;
 
 	switch (type) {
 	case CAMERA3_TEMPLATE_PREVIEW:
-		ALOGV("[%s] CAMERA3_TEMPLATE_PREVIEW", __func__);
+		ALOGD("[%s] CAMERA3_TEMPLATE_PREVIEW:%d", __func__, type);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
-		break;
-
-	case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
-		ALOGV("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG", __func__);
-		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
+		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
 		break;
 
 	case CAMERA3_TEMPLATE_STILL_CAPTURE:
-		ALOGV("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE", __func__);
+		ALOGD("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE:%d", __func__, type);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
 		break;
 
 	case CAMERA3_TEMPLATE_VIDEO_RECORD:
-		ALOGV("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD", __func__);
+		ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD:%d", __func__, type);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 		break;
 
 	case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
+		ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:%d", __func__, type);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 		break;
 
+	case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
+		ALOGD("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:%d", __func__, type);
+		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
+		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+		break;
+
+	case CAMERA3_TEMPLATE_MANUAL:
+		ALOGD("[%s] CAMERA3_TEMPLATE_MANUAL:%d", __func__, type);
+		controlIntent =ANDROID_CONTROL_CAPTURE_INTENT_MANUAL;
+		//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+		controlMode = ANDROID_CONTROL_MODE_OFF;
+		focusMode = ANDROID_CONTROL_AF_MODE_OFF;
+		aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+		break;
 	default:
 		ALOGD("[%s] not supported", __func__);
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_CUSTOM;
+		//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+		controlMode = ANDROID_CONTROL_MODE_OFF;
+		focusMode = ANDROID_CONTROL_AF_MODE_OFF;
+		aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_OFF;
+		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_OFF;
+		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_OFF;
+		colorMode = ANDROID_COLOR_CORRECTION_MODE_TRANSFORM_MATRIX;
+		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 		break;
 	}
 
 	metaData.update(ANDROID_CONTROL_CAPTURE_INTENT, &controlIntent, 1);
-
-	uint8_t focusMode = ANDROID_CONTROL_AF_MODE_OFF;
+	metaData.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &antibandingMode, 1);
+	focusMode = ANDROID_CONTROL_AF_MODE_OFF;
 	metaData.update(ANDROID_CONTROL_AF_MODE, &focusMode, 1);
+	metaData.update(ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
+	metaData.update(ANDROID_CONTROL_AWB_LOCK, &awbLock, 1);
+	aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+	metaData.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
+	metaData.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
+	metaData.update(ANDROID_CONTROL_MODE, &controlMode, 1);
+	//metaData.update(ANDROID_EDGE_MODE, &edge_mode, 1);
+	metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noise_red_mode, 1);
+	metaData.update(ANDROID_COLOR_CORRECTION_ABERRATION_MODE, &cacMode, 1);
+	//metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorMode, 1);
+	metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noise_red_mode, 1);
+	metaData.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &optStabMode, 1);
+	metaData.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vsMode, 1);
+
+	/* Face Detect Mode */
+        /* For CTS : android.hardware.camera2.cts.CameraDeviceTest#testCameraDeviceManualTemplate */
+        uint8_t facedetect_mode = ANDROID_STATISTICS_FACE_DETECT_MODE_OFF;
+        metaData.update(ANDROID_STATISTICS_FACE_DETECT_MODE, &facedetect_mode, 1);
+
+	/*precapture trigger*/
+	uint8_t precapture_trigger = ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
+	metaData.update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &precapture_trigger, 1);
+
+	/*af trigger*/
+	uint8_t af_trigger = ANDROID_CONTROL_AF_TRIGGER_IDLE;
+	metaData.update(ANDROID_CONTROL_AF_TRIGGER, &af_trigger, 1);
+
+	uint8_t  shadingMapMode = ANDROID_SHADING_MODE_OFF;
+	metaData.update(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE, &shadingMapMode, 1);
+
+        int32_t exposureCompensation = 0;
+        metaData.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION,
+                        &exposureCompensation, 1);
 
 	/*flash */
 	uint8_t flashMode = ANDROID_FLASH_MODE_OFF;
 	metaData.update(ANDROID_FLASH_MODE, &flashMode, 1);
 
-	uint8_t awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
-	metaData.update(ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
-
-	uint8_t controlMode = ANDROID_CONTROL_MODE_OFF;
-	metaData.update(ANDROID_CONTROL_MODE, &controlMode, 1);
-
+	/*effect mode*/
 	uint8_t effectMode = ANDROID_CONTROL_EFFECT_MODE_OFF;
 	metaData.update(ANDROID_CONTROL_EFFECT_MODE, &effectMode, 1);
 
-	uint8_t aeMode = ANDROID_CONTROL_AE_MODE_OFF;
-	metaData.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
+	/*scene mode*/
+	uint8_t sceneMode = ANDROID_CONTROL_SCENE_MODE_FACE_PRIORITY;
+	metaData.update(ANDROID_CONTROL_SCENE_MODE, &sceneMode, 1);
 
-	metaInfo = metaData.release();
-	return metaInfo;
+	/*test pattern mode*/
+	int32_t testpatternMode = ANDROID_SENSOR_TEST_PATTERN_MODE_OFF;
+	metaData.update(ANDROID_SENSOR_TEST_PATTERN_MODE, &testpatternMode, 1);
+	if (gStaticMetadata[mCameraId] == NULL) {
+		ALOGD("gStaticMetadata for %d is not initialized", mCameraId);
+		mRequestMetadata[type-1] = metaData.release();
+		return mRequestMetadata[type-1];
+	}
+
+	/* metadata from static metadata */
+	CameraMetadata meta;
+
+	meta = gStaticMetadata[mCameraId];
+
+	float default_focal_length = 0;
+	if (meta.exists(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS))
+		default_focal_length = meta.find(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS).data.f[0];
+	ALOGD("ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS:%f", default_focal_length);
+	metaData.update(ANDROID_LENS_FOCAL_LENGTH, &default_focal_length, 1);
+
+	/* Fps range */
+	/* For CTS : android.hardware.camera2.cts.CameraDeviceTest#testCameraDeviceManualTemplate */
+	/*target fps range: use maximum range for picture, and maximum fixed range for video*/
+        int32_t available_fps_ranges[2] = {0, 0};
+        if (meta.exists(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)) {
+		if ((type == CAMERA3_TEMPLATE_VIDEO_RECORD) || (type == CAMERA3_TEMPLATE_VIDEO_SNAPSHOT)) {
+			available_fps_ranges[0] =
+				meta.find(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).data.i32[2];
+			available_fps_ranges[1] =
+				meta.find(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).data.i32[3];
+		} else {
+			available_fps_ranges[0] =
+				meta.find(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).data.i32[0];
+			available_fps_ranges[1] =
+				meta.find(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).data.i32[1];
+		}
+	}
+	ALOGD("available_fps_ranges min:%d, max:%d", available_fps_ranges[0], available_fps_ranges[1]);
+	metaData.update(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, available_fps_ranges, 2);
+	/*scaler crop region*/
+	int32_t sizes[4] = {0, 0, 0, 0};
+	if (meta.exists(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE)) {
+		sizes[0] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[0];
+		sizes[1] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[1];
+		sizes[2] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[2];
+		sizes[3] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[3];
+	}
+	ALOGD("ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE-%d:%d:%d:%d",
+	      sizes[0], sizes[1], sizes[2], sizes[3]);
+	metaData.update(ANDROID_SCALER_CROP_REGION, sizes, 4);
+
+	mRequestMetadata[type-1] = metaData.release();
+
+	return mRequestMetadata[type-1];
+}
+
+int Camera3HWInterface::sendResult(void)
+{
+	camera3_notify_msg_t msg;
+
+	msg.type = CAMERA3_MSG_ERROR;
+	msg.message.error.error_code = CAMERA3_MSG_ERROR_DEVICE;
+	msg.message.error.error_stream = NULL;
+	msg.message.error.frame_number = 0;
+	mCallbacks->notify(mCallbacks, &msg);
+
+	return 0;
+}
+
+int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * request,
+					       bool firstRequest)
+{
+	int ret = -EINVAL;
+	const camera3_stream_buffer_t *buf;
+
+	ALOGD("[%s]", __func__);
+
+	if (request == NULL) {
+		ALOGE("[%s] capture request is NULL", __func__);
+		return ret;
+	}
+
+	if ((firstRequest) && (request->settings == NULL)) {
+		ALOGE("[%s] meta info can't be NULL for the first request",
+		      __func__);
+		return ret;
+	}
+
+	if ((request->num_output_buffers < 1) ||
+		(request->output_buffers == NULL)) {
+		 ALOGE("[%s] output buffer is NULL", __FUNCTION__);
+		 return ret;
+	}
+
+	for (uint32_t i = 0; i < request->num_output_buffers; i++) {
+		buf = request->output_buffers + i;
+		if (buf->release_fence != -1) {
+			ALOGE("[Buffer:%d] release fence is not -1", i);
+			return ret;
+		}
+		if (buf->status != CAMERA3_BUFFER_STATUS_OK) {
+			ALOGE("[Buffer:%d] status is not OK\n", i);
+			sendResult();
+                        return ret;
+                }
+		if (buf->buffer == NULL) {
+                        ALOGE("[Buffer:%d] buffer handle is NULL\n", i);
+                        return ret;
+                }
+		if (*(buf->buffer) == NULL) {
+			ALOGE("[Buffer:%d] private handle is NULL\n", i);
+			return ret;
+		}
+	}
+	return 0;
 }
 
 int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request)
 {
 	int ret = NO_ERROR;
+	bool firstRequest = (mPreviewManager != NULL) ? false: true;
+
+	ret = validateCaptureRequest(request, firstRequest);
+	if (ret) {
+		sendResult();
+		return ret;
+	}
 
 	if (request->input_buffer != NULL)
 		ALOGE("We can't support input buffer!!!");
@@ -262,7 +495,9 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 	meta = request->settings;
 	if (meta.exists(ANDROID_REQUEST_ID)) {
 		int32_t request_id = meta.find(ANDROID_REQUEST_ID).data.i32[0];
-		ALOGV("[%s] requestId:%d", __func__, request_id);
+		ALOGD("[%s] requestId:%d", __func__, request_id);
+		if (mPreviewManager != NULL)
+			mPreviewManager->setPrevFrameNumber(0);
 	}
 
 	/* preview, record, capture: called once per stream */
@@ -272,28 +507,31 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 
 		ALOGD("framenumber:%d, captureIntent:%d",
 			  request->frame_number, captureIntent);
-
-		if ((captureIntent == ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW) ||
-			(captureIntent == ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD)) {
-			/* stop is implicit */
+		if ((captureIntent ==
+                    ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW) ||
+		    (captureIntent ==
+		    ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD)) {
+#if 0
 			if ((mPreviewManager != NULL) &&
-				(mPreviewManager->getIntent() != captureIntent)) {
-					ALOGD("del Stream");
-					ALOGD("==================================================");
-					mPreviewManager->stopStreaming();
-					// TODO: check destructor
-					mPreviewManager = NULL;
+			   (mPreviewManager->getIntent() != captureIntent)) {
+				ALOGD("[DEBUG] del Stream");
+				ALOGD("==================================================");
+				mPreviewManager->stopStreaming();
+				// TODO: check destructor
+				mPreviewManager = NULL;
 			}
+
 			if (mPreviewManager == NULL) {
 				ALOGD("new Stream");
 				ALOGD("==================================================");
-				mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks,
-									captureIntent);
+				mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks);
 				if (mPreviewManager == NULL) {
 					ALOGE("Failed to construct StreamManager for preview");
 					return -ENOMEM;
 				}
+				mPreviewManager->setIntent(captureIntent);
 			}
+#endif
 		}
 	}
 
@@ -310,11 +548,20 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 
 int Camera3HWInterface::flush()
 {
+	ALOGD("[%s]", __func__);
 	return 0;
 }
 
 int Camera3HWInterface::cameraDeviceClose()
 {
+	ALOGD("[DEBUG] %s", __func__);
+
+	if ((mPreviewManager != NULL) && (mPreviewManager->isRunning()))
+		mPreviewManager->stopStreaming();
+
+	if (mPreviewHandle > 0)
+		close(mPreviewHandle);
+
 	return 0;
 }
 
@@ -369,8 +616,10 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 	info->conflicting_devices = NULL;
 	info->conflicting_devices_length = 0;
 
-	info->static_camera_characteristics =
-		::android::android::initStaticMetadata(camera_id, fd);
+	if (gStaticMetadata[camera_id] == NULL)
+		gStaticMetadata[camera_id] = ::android::android::initStaticMetadata(camera_id, fd);
+	info->static_camera_characteristics = gStaticMetadata[camera_id];
+
 	ALOGI("======camera info =====\n");
 	ALOGI("camera facing = %s\n", info->facing ? "Front" : "Back");
 	ALOGI("device version = %d\n", info->device_version);

@@ -26,8 +26,11 @@
 
 #include "GlobalDef.h"
 #include "NXQueue.h"
+#include "Exif.h"
 
 namespace android {
+
+#define MAX_BUFFER_COUNT 8
 
 class NXCamera3Buffer {
 public:
@@ -37,12 +40,12 @@ public:
 	virtual ~NXCamera3Buffer() {
 	}
 
-	void init(uint32_t frameNumber,
-			  camera3_stream_t *ps, buffer_handle_t *pb,
-			  camera3_stream_t *rs = NULL, buffer_handle_t *rb = NULL,
-			  camera3_stream_t *cs = NULL, buffer_handle_t *cb = NULL) {
+	void init(uint32_t frameNumber, const camera_metadata_t *meta,
+		  camera3_stream_t *ps, buffer_handle_t *pb,
+		  camera3_stream_t *rs = NULL, buffer_handle_t *rb = NULL,
+		  camera3_stream_t *cs = NULL, buffer_handle_t *cb = NULL) {
 		mFrameNumber = frameNumber;
-		mHaveTrigger = false;
+		mMetaInfo = meta;
 		mStreams[PREVIEW_STREAM] = ps;
 		mStreams[RECORD_STREAM] = rs;
 		mStreams[CAPTURE_STREAM] = cs;
@@ -81,8 +84,8 @@ public:
 		return mFrameNumber;
 	}
 
-	bool haveTrigger() {
-		return mHaveTrigger;
+	const camera_metadata_t * getMetadata() {
+		return mMetaInfo;
 	}
 
 	void setRecord(camera3_stream_t *s, buffer_handle_t *b) {
@@ -99,40 +102,47 @@ public:
 		mFrameNumber = number;
 	}
 
-	void setTrigger(bool trigger) {
-		mHaveTrigger = trigger;
+	uint8_t getFormat(uint32_t type) {
+		return mStreams[type]->format;
 	}
 
 private:
 	camera3_stream_t *mStreams[MAX_STREAM];
 	buffer_handle_t  *mBuffers[MAX_STREAM];
-	bool		mHaveTrigger;
-	uint32_t	mFrameNumber;
+	uint32_t        mFrameNumber;
+	const camera_metadata_t *mMetaInfo;
 };
 
 class StreamManager : public Thread {
 public:
-	StreamManager(int fd, const camera3_callback_ops_t *callbacks,
-				  uint8_t intent)
+	StreamManager(int fd, const camera3_callback_ops_t *callbacks)
 		: mFd(fd),
-		  mCallbacks(callbacks), mSize(0), mQIndex(0), mIntent(intent),
-		  mPrevFrameNumber(0) {
+		  mCallbacks(callbacks), mSize(0), mQIndex(0),
+		  mPrevFrameNumber(0),
+		  mPipeLineDepth(0),
+		  mMetaInfo(NULL),
+		  mDevice(NULL),
+		  mExif(NULL) {
 		for (uint32_t i = 0; i < MAX_BUFFER_COUNT + 2; i++)
 			mFQ.queue(&mBuffers[i]);
 		ALOGD("[CTOR] SteamManager");
 	}
 	virtual ~StreamManager() {
-		ALOGD("[DTOR] SteamManager");
+		if (mDevice)
+			mDevice->common.close((struct hw_device_t *)mDevice);
+		ALOGD("[DEBUG] [DTOR] SteamManager");
 	}
 
 	virtual status_t readyToRun();
+	int allocBuffer(uint32_t w, uint32_t h, buffer_handle_t **handle);
 	int registerRequest(camera3_capture_request_t *r);
 	void stopStreaming();
+	void drainBuffer();
 	void setQIndex(int index) {
 		mQIndex = index % MAX_BUFFER_COUNT;
 	}
-	uint8_t getIntent() {
-		return mIntent;
+	void setPrevFrameNumber(uint32_t index) {
+		mPrevFrameNumber = index;
 	}
 
 protected:
@@ -143,7 +153,6 @@ private:
 	const camera3_callback_ops_t *mCallbacks;
 	uint32_t mSize;
 	int mQIndex;
-	uint8_t mIntent;
 	/* buffer manage
 	 * mFQ -> mQ -> MRQ -> mFQ
 	 */
@@ -153,14 +162,23 @@ private:
 	Mutex mLock;
 	NXCamera3Buffer mBuffers[MAX_BUFFER_COUNT+2];
 	uint32_t mPrevFrameNumber;
+	uint32_t mPipeLineDepth;
+	const camera_metadata_t *mMetaInfo;
+	alloc_device_t *mDevice;
+	exif_attribute_t *mExif;
 
 private:
 	int setBufferFormat(private_handle_t *h);
 	int sendResult(bool drain = false);
-	void drainBuffer();
+	//void drainBuffer();
 	void stopV4l2();
 	int copyBuffer(private_handle_t *dst, private_handle_t *src);
 	int jpegEncoding(private_handle_t *dst, private_handle_t *src);
+	camera_metadata_t* translateMetadata(const camera_metadata_t *request,
+					     uint32_t frame_number,
+					     nsecs_t timestamp,
+					     uint8_t pipeline_depth);
+
 };
 
 }; // namespace android

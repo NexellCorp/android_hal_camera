@@ -37,6 +37,10 @@ public:
 	int flush();
 
 	int cameraDeviceClose();
+	int validateCaptureRequest(camera3_capture_request_t *request,
+				   bool firstRequest);
+	int sendResult();
+
 	camera3_device_t *getCameraDevice() {
 		return &mCameraDevice;
 	}
@@ -44,7 +48,9 @@ public:
 private:
 	int mCameraId;
 	const camera3_callback_ops_t *mCallbacks;
+	uint8_t mPipelineDepth;
 	int mPreviewHandle;
+	const camera_metadata_t *mRequestMetadata[CAMERA3_TEMPLATE_MANUAL];
 
 private:
 	camera3_device_t mCameraDevice;

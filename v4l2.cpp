@@ -12,8 +12,8 @@
 
 namespace android {
 
-int v4l2_set_format(int fd, uint32_t w, uint32_t h, uint32_t num_planes,
-					uint32_t strides[], uint32_t sizes[])
+int v4l2_set_format(int fd, uint32_t f, uint32_t w, uint32_t h,
+		    uint32_t num_planes, uint32_t strides[], uint32_t sizes[])
 {
 	struct v4l2_format v4l2_fmt;
 
@@ -25,7 +25,7 @@ int v4l2_set_format(int fd, uint32_t w, uint32_t h, uint32_t num_planes,
 
 	v4l2_fmt.fmt.pix_mp.width = w;
 	v4l2_fmt.fmt.pix_mp.height = h;
-	v4l2_fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_YUV420;
+	v4l2_fmt.fmt.pix_mp.pixelformat = f;
 	v4l2_fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
 	v4l2_fmt.fmt.pix_mp.num_planes = num_planes;
 	for (uint32_t i = 0; i < num_planes; i++) {
