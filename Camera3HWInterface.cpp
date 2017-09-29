@@ -17,6 +17,7 @@
 #include "Camera3HWInterface.h"
 
 #define getPriv(dev) ((Camera3HWInterface *)(((camera3_device_t *)dev)->priv))
+#define NSEC_PER_33MSEC 33000000LL
 
 namespace android {
 
@@ -183,7 +184,6 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 	}
 	/* stop is implicit */
 	if (mPreviewManager != NULL) {
-		ALOGD("[DEBUG] del Stream");
 		ALOGD("==================================================");
 		mPreviewManager->stopStreaming();
 		// TODO: check destructor
@@ -191,7 +191,7 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 	}
 
 	if (mPreviewManager == NULL) {
-		ALOGD("[DEBUG] new Stream");
+		ALOGD("new Stream");
 		ALOGD("==================================================");
 		mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks);
 		if (mPreviewManager == NULL) {
@@ -206,7 +206,6 @@ const camera_metadata_t*
 Camera3HWInterface::constructDefaultRequestSettings(int type)
 {
 	ALOGD("[%s] type = %d", __func__, type);
-
 
 	if (mRequestMetadata[type-1] != NULL) {
 		ALOGD("mRequestMetadata for %d is already exist", type);
@@ -234,7 +233,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	uint8_t vsMode = ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
 	uint8_t optStabMode;
 	uint8_t cacMode;
-	uint8_t noise_red_mode;
 
 	switch (type) {
 	case CAMERA3_TEMPLATE_PREVIEW:
@@ -243,7 +241,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
 		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
 		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
 		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
 		break;
 
@@ -252,7 +249,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
 		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
 		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
 		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
 		break;
 
@@ -261,7 +257,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
 		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
 		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
 		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 		break;
 
@@ -270,7 +265,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
 		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
 		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
 		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 		break;
 
@@ -279,7 +273,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
 		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
 		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
 		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
 		break;
 
@@ -292,7 +285,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		aeMode = ANDROID_CONTROL_AE_MODE_OFF;
 		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
 		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_FAST;
 		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 		break;
 	default:
@@ -304,7 +296,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		aeMode = ANDROID_CONTROL_AE_MODE_OFF;
 		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_OFF;
 		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_OFF;
-		noise_red_mode = ANDROID_NOISE_REDUCTION_MODE_OFF;
 		colorMode = ANDROID_COLOR_CORRECTION_MODE_TRANSFORM_MATRIX;
 		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 		break;
@@ -321,10 +312,8 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	metaData.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
 	metaData.update(ANDROID_CONTROL_MODE, &controlMode, 1);
 	//metaData.update(ANDROID_EDGE_MODE, &edge_mode, 1);
-	metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noise_red_mode, 1);
 	metaData.update(ANDROID_COLOR_CORRECTION_ABERRATION_MODE, &cacMode, 1);
 	//metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorMode, 1);
-	metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noise_red_mode, 1);
 	metaData.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &optStabMode, 1);
 	metaData.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vsMode, 1);
 
@@ -410,6 +399,10 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	ALOGD("ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE-%d:%d:%d:%d",
 	      sizes[0], sizes[1], sizes[2], sizes[3]);
 	metaData.update(ANDROID_SCALER_CROP_REGION, sizes, 4);
+
+	/* frame duration */
+	int64_t default_frame_duration = NSEC_PER_33MSEC;
+	metaData.update(ANDROID_SENSOR_FRAME_DURATION, &default_frame_duration, 1);
 
 	mRequestMetadata[type-1] = metaData.release();
 
@@ -507,32 +500,6 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 
 		ALOGD("framenumber:%d, captureIntent:%d",
 			  request->frame_number, captureIntent);
-		if ((captureIntent ==
-                    ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW) ||
-		    (captureIntent ==
-		    ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD)) {
-#if 0
-			if ((mPreviewManager != NULL) &&
-			   (mPreviewManager->getIntent() != captureIntent)) {
-				ALOGD("[DEBUG] del Stream");
-				ALOGD("==================================================");
-				mPreviewManager->stopStreaming();
-				// TODO: check destructor
-				mPreviewManager = NULL;
-			}
-
-			if (mPreviewManager == NULL) {
-				ALOGD("new Stream");
-				ALOGD("==================================================");
-				mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks);
-				if (mPreviewManager == NULL) {
-					ALOGE("Failed to construct StreamManager for preview");
-					return -ENOMEM;
-				}
-				mPreviewManager->setIntent(captureIntent);
-			}
-#endif
-		}
 	}
 
 	if (mPreviewManager != NULL) {
@@ -554,7 +521,7 @@ int Camera3HWInterface::flush()
 
 int Camera3HWInterface::cameraDeviceClose()
 {
-	ALOGD("[DEBUG] %s", __func__);
+	ALOGD("[%s]", __func__);
 
 	if ((mPreviewManager != NULL) && (mPreviewManager->isRunning()))
 		mPreviewManager->stopStreaming();
