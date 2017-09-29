@@ -172,7 +172,7 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 
 		// if (!isRunning() && mQ.size() > 0)
 		if (!isRunning()) {
-			dbg_stream("[DEBUG] START Camera3PreviewThread");
+			dbg_stream("START Camera3PreviewThread");
 			run(String8::format("Camera3PreviewThread"));
 		}
 	} else
@@ -237,7 +237,7 @@ status_t StreamManager::readyToRun()
 	return NO_ERROR;
 
 fail:
-	dbg_stream("[DEBUG] failed to stream on:%d", ret);
+	dbg_stream("failed to stream on:%d", ret);
 	drainBuffer();
 	ret = v4l2_req_buf(mFd, 0);
 	if (ret) {
@@ -296,7 +296,7 @@ bool StreamManager::threadLoop()
 	return true;
 
 stop:
-	dbg_stream("[DEBUG] StreamManager thread is stopped");
+	dbg_stream("StreamManager thread is stopped");
 	drainBuffer();
 	stopV4l2();
 	return false;
@@ -410,11 +410,6 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 		dbg_stream("ANDROID_CONTROL_AE_TARGET_FPS_RANGE-min:%d,max:%d",
 			   fps_range[0], fps_range[1]);
 		metaData.update(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, fps_range, 2);
-		#if 1
-		int64_t sensorFrameDuration = (long) 1e9/fps_range[1];
-		dbg_stream("ANDROID_SENSOR_FRAME_DURATION:%ld", sensorFrameDuration);
-		metaData.update(ANDROID_SENSOR_FRAME_DURATION, &sensorFrameDuration, 1);
-		#endif
 	}
 	if (meta.exists(ANDROID_CONTROL_AF_TRIGGER) &&
 	     meta.exists(ANDROID_CONTROL_AF_TRIGGER_ID)) {
@@ -583,12 +578,6 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 		dbg_stream("ANDROID_CONTROL_VIDEO_STABILIZATION_MODE:%d", vsMode);
 		metaData.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vsMode, 1);
 	}
-	if (meta.exists(ANDROID_NOISE_REDUCTION_MODE)) {
-		uint8_t noiseRedMode =
-			meta.find(ANDROID_NOISE_REDUCTION_MODE).data.u8[0];
-		dbg_stream("ANDROID_NOISE_REDUCTION_MODE:%d", noiseRedMode);
-		metaData.update(ANDROID_NOISE_REDUCTION_MODE, &noiseRedMode, 1);
-	}
 	if (meta.exists(ANDROID_SCALER_CROP_REGION)) {
 		int32_t scalerCropRegion[4];
 		scalerCropRegion[0] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[0];
@@ -607,14 +596,21 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 		metaData.update(ANDROID_SENSOR_EXPOSURE_TIME, &sensorExpTime, 1);
 		mExif->setExposureTime(sensorExpTime);
 	}
-	#if 0
 	if (meta.exists(ANDROID_SENSOR_FRAME_DURATION)) {
 		int64_t sensorFrameDuration =
 			meta.find(ANDROID_SENSOR_FRAME_DURATION).data.i64[0];
-		dbg_stream("ANDROID_SENSOR_FRAME_DURATION:%ld", sensorFrameDuration);
+		int64_t minFrameDuration = 0;
+		if (meta.exists(ANDROID_CONTROL_AE_TARGET_FPS_RANGE)) {
+			minFrameDuration = meta.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE).data.i32[0];
+			dbg_stream("minFrame:%ld", minFrameDuration);
+			minFrameDuration = (long) 1e9/ minFrameDuration;
+		}
+		dbg_stream("ANDROID_SENSOR_FRAME_DURATION:%ld, Min:%ld",
+			   sensorFrameDuration, minFrameDuration);
+		if (sensorFrameDuration < minFrameDuration)
+			sensorFrameDuration = minFrameDuration;
 		metaData.update(ANDROID_SENSOR_FRAME_DURATION, &sensorFrameDuration, 1);
 	}
-	#endif
 	/*
 	if (meta.exists(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW)) {
 		int64_t sensorRollingShutterSkew =
@@ -746,28 +742,39 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 			size[1] = temp;
 		}
 		metaData.update(ANDROID_JPEG_THUMBNAIL_SIZE, size, 2);
-		//mExif->setThumbResolution(size[0], size[1]);
-	}
-	/*
-	if (meta.exists(ANDROID_JPEG_GPS_LOCATION)) {
-		dbg_stream("ANDROID_JPEG_GPS_LOCATION");
-	}
-	*/
+		mExif->setThumbResolution(size[0], size[1]);
+	} else
+		mExif->setThumbResolution(0, 0);
 
 	if (meta.exists(ANDROID_JPEG_GPS_COORDINATES)) {
-		dbg_stream("ANDROID_JPEG_GPS_COORDINATES");
-		mExif->setGpsCoordinates(meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d);
+		double gps[3];
+		gps[0] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[0];
+		gps[1] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[1];
+		gps[2] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[2];
+		dbg_stream("ANDROID_JPEG_GPS_COORDINATES-%f:%f:%f", gps[0], gps[1], gps[2]);
+		mExif->setGpsCoordinates(gps);
+		metaData.update(ANDROID_JPEG_GPS_COORDINATES, gps, 3);
+	} else {
+		double gps[3];
+		memset(gps, 0x0, sizeof(double) * 3);
+		mExif->setGpsCoordinates(gps);
 	}
 
 	if (meta.exists(ANDROID_JPEG_GPS_PROCESSING_METHOD)) {
-		dbg_stream("ANDROID_JPEG_GPS_PROCESSING_METHOD");
+		dbg_stream("ANDROID_JPEG_GPS_PROCESSING_METHOD count:%d",
+			   meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
 		mExif->setGpsProcessingMethod(meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
 					      meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
+		metaData.update(ANDROID_JPEG_GPS_PROCESSING_METHOD,
+				meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
+				meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
 	}
 
 	if (meta.exists(ANDROID_JPEG_GPS_TIMESTAMP)) {
-		dbg_stream("ANDROID_JPEG_GPS_TIMESTAMP");
-		mExif->setGpsTimestamp(meta.find(ANDROID_JPEG_GPS_TIMESTAMP).data.i64[0]);
+		int64_t timestamp = meta.find(ANDROID_JPEG_GPS_TIMESTAMP).data.i64[0];
+		dbg_stream("ANDROID_JPEG_GPS_TIMESTAMP:%lld", timestamp);
+		mExif->setGpsTimestamp(timestamp);
+		metaData.update(ANDROID_JPEG_GPS_TIMESTAMP, &timestamp, 1);
 	}
 
 	if (meta.exists(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE)) {
@@ -996,7 +1003,7 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 		ret = -EINVAL;
 		goto unlock;
 	}
-	dbg_stream("[DEBUG] Exif size:%d", exifSize);
+	dbg_stream("Exif size:%d", exifSize);
 
 	int jpegSize;
 	int jpegBufSize;
@@ -1019,7 +1026,6 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 
 	jpegBufSize = dst->size;
 	jpegBuf = (char *) dstY;
-	dbg_stream("[DEBUG] dst:%p, jpegBuf:%p", dstY, jpegBuf);
 	jpegBlob = (camera3_jpeg_blob_t *)(&jpegBuf[jpegBufSize -
 						sizeof(camera3_jpeg_blob_t)]);
 	jpegBlob->jpeg_size = jpegSize + exifSize;

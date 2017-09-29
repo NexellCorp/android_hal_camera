@@ -34,7 +34,7 @@ bool ExifProcessor::preprocessExif()
     time(&rawtime);
     timeinfo = localtime(&rawtime);
     strftime((char *)Exif->date_time, 20, "%Y:%m:%d %H:%M:%S", timeinfo);
-    //strftime((char *)Exif->secTime, 3, "%S",timeinfo);
+    snprintf((char *)Exif->sec_time, 7, "%06d",timeinfo->tm_sec);
 
     uint32_t av, tv, bv, sv, ev;
     av = APEX_FNUM_TO_APERTURE((double)Exif->fnumber.num / Exif->fnumber.den);
@@ -171,7 +171,6 @@ bool ExifProcessor::processExif()
     writeExifIfd(pCur, EXIF_TAG_ORIENTATION, EXIF_TYPE_SHORT, 1, Exif->orientation);
     writeExifIfd(pCur, EXIF_TAG_SOFTWARE, EXIF_TYPE_ASCII, strlen((char *)Exif->software) + 1, Exif->software, LongerTagOffset, pIfdStart);
     writeExifIfd(pCur, EXIF_TAG_DATE_TIME, EXIF_TYPE_ASCII, 20, Exif->date_time, LongerTagOffset, pIfdStart);
-    writeExifIfd(pCur, EXIF_TAG_SUBSEC_TIME, EXIF_TYPE_ASCII, 20, Exif->date_time, LongerTagOffset, pIfdStart);
     writeExifIfd(pCur, EXIF_TAG_YCBCR_POSITIONING, EXIF_TYPE_SHORT, 1, Exif->ycbcr_positioning);
     writeExifIfd(pCur, EXIF_TAG_EXIF_IFD_POINTER, EXIF_TYPE_LONG, 1, LongerTagOffset);
 
@@ -198,8 +197,9 @@ bool ExifProcessor::processExif()
     writeExifIfd(pCur, EXIF_TAG_EXIF_VERSION, EXIF_TYPE_UNDEFINED, 4, Exif->exif_version);
     writeExifIfd(pCur, EXIF_TAG_DATE_TIME_ORG, EXIF_TYPE_ASCII, 20, Exif->date_time, LongerTagOffset, pIfdStart);
     writeExifIfd(pCur, EXIF_TAG_DATE_TIME_DIGITIZE, EXIF_TYPE_ASCII, 20, Exif->date_time, LongerTagOffset, pIfdStart);
-    writeExifIfd(pCur, EXIF_TAG_SUBSEC_TIME_ORIGINAL, EXIF_TYPE_ASCII, 20, Exif->date_time, LongerTagOffset, pIfdStart);
-    writeExifIfd(pCur, EXIF_TAG_SUBSEC_TIME_DIGITIZED, EXIF_TYPE_ASCII, 20, Exif->date_time, LongerTagOffset, pIfdStart);
+    writeExifIfd(pCur, EXIF_TAG_SUBSEC_TIME, EXIF_TYPE_ASCII, 7, Exif->sec_time, LongerTagOffset, pIfdStart);
+    writeExifIfd(pCur, EXIF_TAG_SUBSEC_TIME_ORIGINAL, EXIF_TYPE_ASCII, 7, Exif->sec_time, LongerTagOffset, pIfdStart);
+    writeExifIfd(pCur, EXIF_TAG_SUBSEC_TIME_DIGITIZED, EXIF_TYPE_ASCII, 7, Exif->sec_time, LongerTagOffset, pIfdStart);
     writeExifIfd(pCur, EXIF_TAG_SHUTTER_SPEED, EXIF_TYPE_SRATIONAL, 1, (rational_t *)&Exif->shutter_speed, LongerTagOffset, pIfdStart);
     writeExifIfd(pCur, EXIF_TAG_APERTURE, EXIF_TYPE_RATIONAL, 1, &Exif->aperture, LongerTagOffset, pIfdStart);
     writeExifIfd(pCur, EXIF_TAG_BRIGHTNESS, EXIF_TYPE_SRATIONAL, 1, (rational_t *)&Exif->brightness, LongerTagOffset, pIfdStart);

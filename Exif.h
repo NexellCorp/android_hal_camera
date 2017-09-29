@@ -39,8 +39,8 @@
 #define IFD_SIZE                    12
 #define OFFSET_SIZE                 4
 
-#define NUM_0TH_IFD_TIFF            11 //10
-#define NUM_0TH_IFD_EXIF            24 //22
+#define NUM_0TH_IFD_TIFF            10
+#define NUM_0TH_IFD_EXIF            25 //22
 #define NUM_0TH_IFD_GPS             10
 #define NUM_1TH_IFD_TIFF            9
 
@@ -68,7 +68,6 @@
 #define EXIF_TAG_YCBCR_POSITIONING              0x0213
 #define EXIF_TAG_EXIF_IFD_POINTER               0x8769
 #define EXIF_TAG_GPS_IFD_POINTER                0x8825
-#define EXIF_TAG_SUBSEC_TIME			0x9290
 
 /* 0th IFD Exif Private Tags */
 #define EXIF_TAG_EXPOSURE_TIME                  0x829A
@@ -87,6 +86,7 @@
 #define EXIF_TAG_FLASH                          0x9209
 #define EXIF_TAG_FOCAL_LENGTH                   0x920A
 #define EXIF_TAG_USER_COMMENT                   0x9286
+#define EXIF_TAG_SUBSEC_TIME			0x9290
 #define EXIF_TAG_SUBSEC_TIME_ORIGINAL		0x9291
 #define EXIF_TAG_SUBSEC_TIME_DIGITIZED		0x9292
 #define EXIF_TAG_COLOR_SPACE                    0xA001
@@ -465,7 +465,7 @@ typedef struct {
     unsigned char exif_version[4];
     unsigned char date_time[20];
     unsigned char user_comment[150];
-    //unsigned char secTime[20];
+    unsigned char sec_time[7];
 
     uint32_t width;
     uint32_t height;

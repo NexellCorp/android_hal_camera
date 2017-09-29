@@ -130,7 +130,7 @@ public:
 	virtual ~StreamManager() {
 		if (mDevice)
 			mDevice->common.close((struct hw_device_t *)mDevice);
-		ALOGD("[DEBUG] [DTOR] SteamManager");
+		ALOGD("[DTOR] SteamManager");
 	}
 
 	virtual status_t readyToRun();
