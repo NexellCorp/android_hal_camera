@@ -107,6 +107,7 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 	: mCameraId(cameraId),
 	mCallbacks(NULL),
 	mPreviewHandle(-1),
+	mAllocator(NULL),
 	mPreviewManager(NULL)
 {
 	memset(&mCameraDevice, 0x0, sizeof(camera3_device_t));
@@ -150,6 +151,21 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		ALOGD("mRequestMetadata[%d] = %p\n", j, mRequestMetadata[j]);
 	}
 
+	if (mAllocator == NULL) {
+		hw_device_t *dev = NULL;
+		alloc_device_t *device = NULL;
+		hw_module_t const *pmodule = NULL;
+		gralloc_module_t const *module = NULL;
+		hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
+		module = reinterpret_cast<gralloc_module_t const *>(pmodule);
+		module->common.methods->open(pmodule, GRALLOC_HARDWARE_GPU0, &dev);
+		if (dev == NULL) {
+			ALOGE("Failed to open alloc device");
+			return -ENODEV;
+		}
+		device = reinterpret_cast<alloc_device_t *>(dev);
+		mAllocator = device;
+	}
 	return 0;
 }
 
@@ -193,12 +209,13 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 	if (mPreviewManager == NULL) {
 		ALOGD("new Stream");
 		ALOGD("==================================================");
-		mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks);
+		mPreviewManager = new StreamManager(mPreviewHandle, mCallbacks, mAllocator);
 		if (mPreviewManager == NULL) {
 			ALOGE("Failed to construct StreamManager for preview");
 			return -ENOMEM;
 		}
 	}
+
 	return 0;
 }
 
@@ -526,8 +543,15 @@ int Camera3HWInterface::cameraDeviceClose()
 	if ((mPreviewManager != NULL) && (mPreviewManager->isRunning()))
 		mPreviewManager->stopStreaming();
 
-	if (mPreviewHandle > 0)
+	if (mAllocator)
+		mAllocator->common.close((struct hw_device_t *)mAllocator);
+
+	ALOGD("mPreviewHandle = %d", mPreviewHandle);
+	if (mPreviewHandle >= 0) {
+		ALOGD("close preview handle");
 		close(mPreviewHandle);
+		mPreviewHandle = -1;
+	}
 
 	return 0;
 }
@@ -618,7 +642,7 @@ static int cameraOpen(const struct hw_module_t *,
 
 	Camera3HWInterface *camera3Hal = new Camera3HWInterface(camera_id);
 	if (camera3Hal == NULL) {
-		ALOGE("[%s] failed to create Camera3HWInterface", __func__);
+		ALOGE("[%s] Failed to create Camera3HWInterface", __func__);
 		return -ENOMEM;
 	}
 	*device = &camera3Hal->getCameraDevice()->common;

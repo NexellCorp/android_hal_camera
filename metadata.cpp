@@ -21,16 +21,15 @@ static int32_t checkMaxFps(uint32_t count, struct v4l2_frame_interval *f)
 static int32_t checkMaxJpegSize(uint32_t count, struct v4l2_frame_interval *f)
 {
 	uint32_t i;
-	uint32_t max = (f[0].width * f[0].height) * 3;
+	uint32_t max = (f[0].width * f[0].height)*3;
 
 	if (count == 1)
 		return max;
 
 	for (i = 1; i < count; i++) {
 		if ((f[i].width * f[i].height) > (f[i-1].width * f[i-1].height))
-			max = (f[i].width * f[i].height);
+			max = (f[i].width * f[i].height)*3;
 	}
-	max *= max *3;
 	return max;
 }
 
@@ -285,7 +284,8 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 		144, 96,
 		160, 90,
 		160, 120,
-		160, 160
+		176, 120,
+		160, 160,
 	};
 
 	staticInfo.update(ANDROID_JPEG_AVAILABLE_THUMBNAIL_SIZES,
@@ -299,14 +299,10 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 	int32_t jpegMaxSize = checkMaxJpegSize(r, frames);
 	staticInfo.update(ANDROID_JPEG_MAX_SIZE, &jpegMaxSize, 1);
 
-	int32_t thumbnail_size[2] = {
-		160, 90
-	};
-	staticInfo.update(ANDROID_JPEG_THUMBNAIL_SIZE, thumbnail_size, 2);
-
 	uint8_t timestampSource = ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME;
 	staticInfo.update(ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE,
 			  &timestampSource, 1);
+
 	int32_t available_high_speed_video_config[] = {};
 	staticInfo.update(ANDROID_CONTROL_AVAILABLE_HIGH_SPEED_VIDEO_CONFIGURATIONS,
 			  available_high_speed_video_config, 0);
@@ -609,7 +605,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 		ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL,
 		ANDROID_JPEG_AVAILABLE_THUMBNAIL_SIZES,
 		ANDROID_JPEG_MAX_SIZE,
-		ANDROID_JPEG_THUMBNAIL_SIZE,
+		//ANDROID_JPEG_THUMBNAIL_SIZE,
 		ANDROID_LENS_FACING,
 		ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS,
 		ANDROID_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION,

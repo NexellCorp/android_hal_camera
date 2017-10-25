@@ -29,7 +29,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libcamera_metadata \
 	libcamera_client \
 	libsync \
-	libnxjpeg
+	libnxjpeg \
+	libnx_scaler
 LOCAL_C_INCLUDES += \
 	system/media/camera/include \
 	system/media/core/include \
@@ -37,6 +38,7 @@ LOCAL_C_INCLUDES += \
 	system/core/include/utils \
 	frameworks/native/include \
 	frameworks/av/include \
+	device/nexell/library/nx-scaler \
 	$(LOCAL_PATH)/../gralloc \
 	$(LOCAL_PATH)/../libnxjpeg \
 	external/libjpeg-turbo \

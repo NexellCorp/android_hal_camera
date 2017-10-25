@@ -346,6 +346,9 @@ struct exif_attribute_t {
         y_resolution.den = EXIF_DEF_RESOLUTION_DEN;
         resolution_unit = EXIF_DEF_RESOLUTION_UNIT;
         compression_scheme = EXIF_DEF_COMPRESSION;
+	widthThumb = 0;
+	heightThumb = 0;
+	orientation = 0;
     }
 
     bool setThumbResolution(const uint32_t& widthThumb, const uint32_t& heightThumb) {
@@ -366,7 +369,6 @@ struct exif_attribute_t {
     }
 
     bool setOrientation(const uint32_t& orientation) {
-	ALOGD("[DEBUG] Orientation-%d:%d", this->orientation, orientation);
         if (orientation != this->orientation) {
             this->orientation = orientation;
             return true;

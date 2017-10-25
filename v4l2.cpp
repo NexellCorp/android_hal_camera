@@ -43,8 +43,6 @@ int v4l2_req_buf(int fd, int count)
 {
 	struct v4l2_requestbuffers req;
 
-	ALOGV("[%s] req buf count is %d\n", __func__, count);
-
 	bzero(&req, sizeof(req));
 	req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	req.memory = V4L2_MEMORY_DMABUF;
@@ -106,7 +104,7 @@ int v4l2_streamon(int fd)
 {
 	uint32_t buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
-	ALOGV("[%s]\n", __func__);
+	ALOGD("[%s]\n", __func__);
 
 	return ioctl(fd, VIDIOC_STREAMON, &buf_type);
 }
@@ -115,7 +113,7 @@ int v4l2_streamoff(int fd)
 {
 	uint32_t buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
-	ALOGV("[%s]\n", __func__);
+	ALOGD("[%s]\n", __func__);
 	return ioctl(fd, VIDIOC_STREAMOFF, &buf_type);
 }
 

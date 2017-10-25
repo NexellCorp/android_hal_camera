@@ -27,6 +27,7 @@
 #include "GlobalDef.h"
 #include "NXQueue.h"
 #include "Exif.h"
+#include "ExifProcessor.h"
 
 namespace android {
 
@@ -115,21 +116,20 @@ private:
 
 class StreamManager : public Thread {
 public:
-	StreamManager(int fd, const camera3_callback_ops_t *callbacks)
+	StreamManager(int fd, const camera3_callback_ops_t *callbacks, alloc_device_t *allocator)
 		: mFd(fd),
 		  mCallbacks(callbacks), mSize(0), mQIndex(0),
 		  mPrevFrameNumber(0),
 		  mPipeLineDepth(0),
 		  mMetaInfo(NULL),
-		  mDevice(NULL),
-		  mExif(NULL) {
+		  mAllocator(allocator) {
+		if (mAllocator == NULL)
+			ALOGE("allocator is NULL");
 		for (uint32_t i = 0; i < MAX_BUFFER_COUNT + 2; i++)
 			mFQ.queue(&mBuffers[i]);
-		ALOGD("[CTOR] SteamManager");
+		ALOGD("[CTOR] SteamManager mFd:%d", mFd);
 	}
 	virtual ~StreamManager() {
-		if (mDevice)
-			mDevice->common.close((struct hw_device_t *)mDevice);
 		ALOGD("[DTOR] SteamManager");
 	}
 
@@ -164,18 +164,17 @@ private:
 	uint32_t mPrevFrameNumber;
 	uint32_t mPipeLineDepth;
 	const camera_metadata_t *mMetaInfo;
-	alloc_device_t *mDevice;
-	exif_attribute_t *mExif;
+	alloc_device_t *mAllocator;
+	ExifProcessor mExifProcessor;
 
 private:
 	int setBufferFormat(private_handle_t *h);
 	int sendResult(bool drain = false);
-	//void drainBuffer();
 	void stopV4l2();
 	int copyBuffer(private_handle_t *dst, private_handle_t *src);
-	int jpegEncoding(private_handle_t *dst, private_handle_t *src);
+	int jpegEncoding(private_handle_t *dst, private_handle_t *src, exif_attribute_t *exif);
 	camera_metadata_t* translateMetadata(const camera_metadata_t *request,
-					     uint32_t frame_number,
+					     exif_attribute_t *mExif,
 					     nsecs_t timestamp,
 					     uint8_t pipeline_depth);
 

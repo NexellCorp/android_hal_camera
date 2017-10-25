@@ -48,9 +48,10 @@ public:
 private:
 	int mCameraId;
 	const camera3_callback_ops_t *mCallbacks;
-	uint8_t mPipelineDepth;
 	int mPreviewHandle;
-	const camera_metadata_t *mRequestMetadata[CAMERA3_TEMPLATE_MANUAL];
+	alloc_device_t *mAllocator;
+	const camera_metadata_t *mRequestMetadata[CAMERA3_TEMPLATE_MANUAL] =
+		{NULL, NULL, NULL, NULL, NULL};
 
 private:
 	camera3_device_t mCameraDevice;

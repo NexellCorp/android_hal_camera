@@ -5,9 +5,9 @@
 #include <camera/Camera.h>
 #include <hardware/camera3.h>
 
+#include <linux/videodev2.h>
 #include <libnxjpeg.h>
 
-#include <linux/videodev2.h>
 #include "v4l2.h"
 #include "Exif.h"
 #include "ExifProcessor.h"
@@ -15,7 +15,7 @@
 
 namespace android {
 
-#define TRACE_STREAM
+//#define TRACE_STREAM
 #ifdef TRACE_STREAM
 #define dbg_stream(a...)	ALOGD(a)
 #else
@@ -24,6 +24,11 @@ namespace android {
 
 int StreamManager::allocBuffer(uint32_t w, uint32_t h, buffer_handle_t **p)
 {
+	if (mAllocator == NULL) {
+		ALOGE("Allocator is NULL");
+		return -ENODEV;
+	}
+
 	hw_device_t *dev = NULL;
 	alloc_device_t *device = NULL;
 	hw_module_t const *pmodule = NULL;
@@ -33,24 +38,14 @@ int StreamManager::allocBuffer(uint32_t w, uint32_t h, buffer_handle_t **p)
 	int ret = 0, stride= 0;
 	buffer_handle_t *pHandle;
 
-	if (mDevice == NULL) {
-		module->common.methods->open(pmodule, GRALLOC_HARDWARE_GPU0, &dev);
-		if (ret) {
-			ALOGE("failed to open alloc device");
-			return -ENODEV;
-		}
-		device = reinterpret_cast<alloc_device_t *>(dev);
-		mDevice = device;
-	}
-
 	pHandle = (buffer_handle_t *)malloc(sizeof(buffer_handle_t));
 	if (pHandle == NULL)
 		return -ENOMEM;
 
-	ret = mDevice->alloc(mDevice, w, h, HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
+	ret = mAllocator->alloc(mAllocator, w, h, HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
 			    PROT_READ | PROT_WRITE, pHandle, &stride);
 	if (ret) {
-		ALOGE("failed to alloc a buffer:%d", ret);
+		ALOGE("Failed to alloc a buffer:%d", ret);
 		return -EINVAL;
 	}
 
@@ -138,8 +133,8 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 		NXCamera3Buffer *buf = mFQ.dequeue();
 		if (!buf) {
 			ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
-			if ((mDevice) && (prev->buffer))
-				mDevice->free(mDevice, (buffer_handle_t)*prev->buffer);
+			if ((mAllocator) && (prev->buffer))
+				mAllocator->free(mAllocator, (buffer_handle_t)*prev->buffer);
 			if (prev)
 				free(prev);
 			return -ENOMEM;
@@ -195,14 +190,14 @@ status_t StreamManager::readyToRun()
 	private_handle_t *ph = buf->getPrivateHandle(PREVIEW_STREAM);
 	int ret = setBufferFormat(ph);
 	if (ret) {
-		ALOGE("Failed to setBufferFormat");
+		ALOGE("Failed to setBufferFormat:%d, mFd:%d", ret, mFd);
 		drainBuffer();
 		return ret;
 	}
 
 	ret = v4l2_req_buf(mFd, MAX_BUFFER_COUNT);
 	if (ret) {
-		ALOGE("Failed to req buf : %d\n", ret);
+		ALOGE("Failed to req buf : %d, mFd:%d\n", ret, mFd);
 		drainBuffer();
 		return ret;
 	}
@@ -212,7 +207,7 @@ status_t StreamManager::readyToRun()
 		buf = mQ.dequeue();
 		dbg_stream("mQ.dequeue: %p", buf);
 		if (!buf) {
-			ALOGE("FATAL ERROR: Check Q!!!");
+			ALOGE("Fail - FATAL ERROR: Check Q!!!");
 			ret = -EINVAL;
 			goto fail;
 		}
@@ -237,11 +232,11 @@ status_t StreamManager::readyToRun()
 	return NO_ERROR;
 
 fail:
-	dbg_stream("failed to stream on:%d", ret);
+	dbg_stream("Failed to stream on:%d", ret);
 	drainBuffer();
 	ret = v4l2_req_buf(mFd, 0);
 	if (ret) {
-		ALOGE("Failed to req buf(line: %d): %d\n", __LINE__, ret);
+		ALOGE("Failed to req buf(line: %d): %d, mFd:%d\n", __LINE__, ret, mFd);
 	}
 	return ret;
 }
@@ -273,11 +268,11 @@ bool StreamManager::threadLoop()
 	if (qSize > 0) {
 		for (int i = 0; i < qSize; i++) {
 			NXCamera3Buffer *buf = mQ.dequeue();
-			dbg_stream("mQ.dequeue: %p", buf);
+			dbg_stream("mQ.dequeue: %p, mQIndex:%d", buf, mQIndex);
 			int dma_fd = buf->getDmaFd(PREVIEW_STREAM);
 			ret = v4l2_qbuf(mFd, mQIndex, &dma_fd, 1, &mSize);
 			if (ret) {
-				ALOGE("Failed to qbuf index %d", mQIndex);
+				ALOGE("Failed to qbuf index %d, ret:%d, mFd:%d", mQIndex, ret, mFd);
 				goto stop;
 			}
 			dbg_stream("qbuf index %d", mQIndex);
@@ -324,7 +319,7 @@ int StreamManager::setBufferFormat(private_handle_t *buf)
 	ret = module->lock_ycbcr(module, buf, PROT_READ | PROT_WRITE, 0, 0,
 				 buf->width, buf->height, &ycbcr);
 	if (ret) {
-		ALOGE("failed to lock_ycbcr for the buf - %d", buf->share_fd);
+		ALOGE("Failed to lock_ycbcr for the buf - %d", buf->share_fd);
 		return -EINVAL;
 	}
 	ALOGD("[%s] ystride:%zu, cstride:%zu", __func__, ycbcr.ystride,
@@ -356,14 +351,14 @@ int StreamManager::setBufferFormat(private_handle_t *buf)
 	ret = v4l2_set_format(mFd, f, buf->width, buf->height,
 			      num_planes, strides, sizes);
 	if (ret) {
-		ALOGE("failed to set format : %d\n", ret);
+		ALOGE("Failed to set format : %d\n", ret);
 		return ret;
 	}
 
 	if (module != NULL) {
 		ret = module->unlock(module, buf);
 		if (ret) {
-			ALOGE("[%s] failed to gralloc unlock:%d\n", __FUNCTION__, ret);
+			ALOGE("[%s] Failed to gralloc unlock:%d\n", __FUNCTION__, ret);
 			return ret;
 		}
 	}
@@ -373,16 +368,13 @@ int StreamManager::setBufferFormat(private_handle_t *buf)
 
 camera_metadata_t*
 StreamManager::translateMetadata(const camera_metadata_t *request,
-				 uint32_t frame_number,
+				 exif_attribute_t *mExif,
 				 nsecs_t timestamp,
 				 uint8_t pipeline_depth)
 {
 	CameraMetadata meta;
 	camera_metadata_t *result;
 	CameraMetadata metaData;
-
-	if (mExif == NULL)
-		mExif = new exif_attribute_t();
 
 	meta = request;
 
@@ -511,13 +503,15 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 		//uint8_t awbState = ANDROID_CONTROL_AWB_STATE_INACTIVE;
 		dbg_stream("ANDROID_CONTROL_AWB_STATE:%d", awbState);
 		metaData.update(ANDROID_CONTROL_AWB_STATE, &awbState, 1);
-		mExif->setWhiteBalance(awbMode);
+		if (mExif)
+			mExif->setWhiteBalance(awbMode);
 	}
 	if (meta.exists(ANDROID_CONTROL_SCENE_MODE)) {
 		uint8_t sceneMode = meta.find(ANDROID_CONTROL_SCENE_MODE).data.u8[0];
 		dbg_stream("ANDROID_CONTROL_SCENE_MODE:%d", sceneMode);
 		metaData.update(ANDROID_CONTROL_SCENE_MODE, &sceneMode, 1);
-		mExif->setSceneCaptureType(sceneMode);
+		if (mExif)
+			mExif->setSceneCaptureType(sceneMode);
 	}
 	/*
 	if (meta.exists(ANDROID_COLOR_CORRECTION_MODE)) {
@@ -542,7 +536,8 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 		dbg_stream("ANDROID_FLASH_STATE:%d", flashState);
 		metaData.update(ANDROID_FLASH_STATE, &flashState, 1);
 		metaData.update(ANDROID_FLASH_MODE, &flashMode, 1);
-		mExif->setFlashMode(flashMode);
+		if (mExif)
+			mExif->setFlashMode(flashMode);
 	}
 	/*
 	if (meta.exists(ANDROID_EDGE_MODE)) {
@@ -565,7 +560,8 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 		rational_t focal_length;
 		focal_length.num = (uint32_t)(focalLength * EXIF_DEF_FOCAL_LEN_DEN);
 		focal_length.den = EXIF_DEF_FOCAL_LEN_DEN;
-		mExif->setFocalLength(focal_length);
+		if (mExif)
+			mExif->setFocalLength(focal_length);
 	}
 	if (meta.exists(ANDROID_LENS_OPTICAL_STABILIZATION_MODE)) {
 		uint8_t optStabMode =
@@ -594,7 +590,8 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 			meta.find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
 		dbg_stream("ANDROID_SENSOR_EXPOSURE_TIME:%ld", sensorExpTime);
 		metaData.update(ANDROID_SENSOR_EXPOSURE_TIME, &sensorExpTime, 1);
-		mExif->setExposureTime(sensorExpTime);
+		if (mExif)
+			mExif->setExposureTime(sensorExpTime);
 	}
 	if (meta.exists(ANDROID_SENSOR_FRAME_DURATION)) {
 		int64_t sensorFrameDuration =
@@ -708,7 +705,8 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 			exifOri = EXIF_ORIENTATION_270;
 		else
 			exifOri = EXIF_ORIENTATION_UP;
-		mExif->setOrientation(exifOri);
+		if (mExif)
+			mExif->setOrientation(exifOri);
 	}
 	if (meta.exists(ANDROID_JPEG_QUALITY)) {
 		uint8_t quality =
@@ -721,30 +719,22 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 			meta.find(ANDROID_JPEG_THUMBNAIL_QUALITY).data.u8[0];
 		dbg_stream("ANDROID_JPEG_THUMBNAIL_QUALITY:%d", thumb_quality);
 		metaData.update(ANDROID_JPEG_THUMBNAIL_QUALITY, &thumb_quality, 1);
-		mExif->setThumbnailQuality(thumb_quality);
+		if (mExif)
+			mExif->setThumbnailQuality(thumb_quality);
 	}
 	if (meta.exists(ANDROID_JPEG_THUMBNAIL_SIZE)) {
-		int32_t orientation = 0;
 		int32_t size[2];
 		size[0] = meta.find(ANDROID_JPEG_THUMBNAIL_SIZE).data.i32[0];
 		size[1] = meta.find(ANDROID_JPEG_THUMBNAIL_SIZE).data.i32[1];
 		dbg_stream("ANDROID_JPEG_THUMBNAIL_SIZE- width:%d, height:%d",
 			   size[0], size[1]);
-
-		if (meta.exists(ANDROID_JPEG_ORIENTATION)) {
-			orientation = meta.find(ANDROID_JPEG_ORIENTATION).data.i32[0];
-			dbg_stream("ANDROID_JPEG_ORIENTATION:%d", orientation);
-			metaData.update(ANDROID_JPEG_ORIENTATION, &orientation, 1);
-		}
-		if ((orientation == 90) || (orientation == 270)) {
-			int32_t temp = size[0];
-			size[0] = size[1];
-			size[1] = temp;
-		}
 		metaData.update(ANDROID_JPEG_THUMBNAIL_SIZE, size, 2);
-		mExif->setThumbResolution(size[0], size[1]);
-	} else
-		mExif->setThumbResolution(0, 0);
+		if (mExif)
+			mExif->setThumbResolution(size[0], size[1]);
+	} else {
+		if (mExif)
+			mExif->setThumbResolution(0, 0);
+	}
 
 	if (meta.exists(ANDROID_JPEG_GPS_COORDINATES)) {
 		double gps[3];
@@ -752,19 +742,22 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 		gps[1] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[1];
 		gps[2] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[2];
 		dbg_stream("ANDROID_JPEG_GPS_COORDINATES-%f:%f:%f", gps[0], gps[1], gps[2]);
-		mExif->setGpsCoordinates(gps);
+		if (mExif)
+			mExif->setGpsCoordinates(gps);
 		metaData.update(ANDROID_JPEG_GPS_COORDINATES, gps, 3);
 	} else {
 		double gps[3];
 		memset(gps, 0x0, sizeof(double) * 3);
-		mExif->setGpsCoordinates(gps);
+		if (mExif)
+			mExif->setGpsCoordinates(gps);
 	}
 
 	if (meta.exists(ANDROID_JPEG_GPS_PROCESSING_METHOD)) {
 		dbg_stream("ANDROID_JPEG_GPS_PROCESSING_METHOD count:%d",
 			   meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
-		mExif->setGpsProcessingMethod(meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
-					      meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
+		if (mExif)
+			mExif->setGpsProcessingMethod(meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
+						meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
 		metaData.update(ANDROID_JPEG_GPS_PROCESSING_METHOD,
 				meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
 				meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
@@ -773,7 +766,8 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 	if (meta.exists(ANDROID_JPEG_GPS_TIMESTAMP)) {
 		int64_t timestamp = meta.find(ANDROID_JPEG_GPS_TIMESTAMP).data.i64[0];
 		dbg_stream("ANDROID_JPEG_GPS_TIMESTAMP:%lld", timestamp);
-		mExif->setGpsTimestamp(timestamp);
+		if (mExif)
+			mExif->setGpsTimestamp(timestamp);
 		metaData.update(ANDROID_JPEG_GPS_TIMESTAMP, &timestamp, 1);
 	}
 
@@ -816,7 +810,6 @@ int StreamManager::sendResult(bool drain)
 
 	/* notify */
 	nsecs_t	timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
-	ALOGD("%[timestamp] %lld", timestamp);
 	camera3_notify_msg_t msg;
 	memset(&msg, 0x0, sizeof(camera3_notify_msg_t));
 	msg.type = CAMERA3_MSG_SHUTTER;
@@ -826,14 +819,22 @@ int StreamManager::sendResult(bool drain)
 
 	/* send result */
 	camera3_capture_result_t result;
+	exif_attribute_t *exif = NULL;
+
+	if ((buf->getStream(CAPTURE_STREAM) != NULL) &&
+		(buf->getFormat(CAPTURE_STREAM) == HAL_PIXEL_FORMAT_BLOB)) {
+		exif = new exif_attribute_t();
+		if (exif == NULL) {
+			ALOGD("[%s] Failed to make exif", __func__);
+		}
+	}
 
 	bzero(&result, sizeof(camera3_capture_result_t));
 
 	result.frame_number = buf->getFrameNumber();
 	result.num_output_buffers = 0;
 	result.result = translateMetadata(buf->getMetadata(),
-					  result.frame_number,
-					  timestamp, mPipeLineDepth);
+					  exif, timestamp, mPipeLineDepth);
 
 	camera3_stream_buffer_t output_buffer[MAX_STREAM];
 	uint32_t index = 0;
@@ -866,7 +867,7 @@ int StreamManager::sendResult(bool drain)
 		if (!drain) {
 			if (buf->getFormat(CAPTURE_STREAM) == HAL_PIXEL_FORMAT_BLOB)
 				jpegEncoding(buf->getPrivateHandle(CAPTURE_STREAM),
-					     buf->getPrivateHandle(PREVIEW_STREAM));
+					     buf->getPrivateHandle(PREVIEW_STREAM), exif);
 			else
 				copyBuffer(buf->getPrivateHandle(CAPTURE_STREAM),
 					   buf->getPrivateHandle(PREVIEW_STREAM));
@@ -881,7 +882,7 @@ int StreamManager::sendResult(bool drain)
 	}
 
 	if (buf->getStream(PREVIEW_STREAM) == NULL) {
-		mDevice->free(mDevice, (buffer_handle_t)*buf->getBuffer(PREVIEW_STREAM));
+		mAllocator->free(mAllocator, (buffer_handle_t)*buf->getBuffer(PREVIEW_STREAM));
 		free(buf->getBuffer(PREVIEW_STREAM));
 	}
 
@@ -902,13 +903,16 @@ int StreamManager::sendResult(bool drain)
 	mPrevFrameNumber = buf->getFrameNumber();
 	mFQ.queue(buf);
 
+	if (exif)
+		delete(exif);
 	dbg_stream("sendResult: X");
+
 	return 0;
 }
 
 void StreamManager::stopStreaming()
 {
-	dbg_stream("[DEBUG] stopStreaming: E");
+	dbg_stream("stopStreaming: E");
 	// wait until all buffer drained
 	while (!mQ.isEmpty() || !mRQ.isEmpty()) {
 		ALOGD("Wait buffer drained");
@@ -916,9 +920,9 @@ void StreamManager::stopStreaming()
 	}
 
 	if (isRunning()) {
-		dbg_stream("[DEBUG] %s --> requestExitAndWait E", __func__);
+		dbg_stream("[%s] --> requestExitAndWait E", __func__);
 		requestExitAndWait();
-		dbg_stream("%s --> requestExitAndWait X", __func__);
+		dbg_stream("[%s] --> requestExitAndWait X", __func__);
 	}
 
 	stopV4l2();
@@ -963,10 +967,11 @@ void StreamManager::drainBuffer()
 	dbg_stream("end draining");
 }
 
-int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
+int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, exif_attribute_t *exif)
 {
 	android_ycbcr srcY;
-	void *dstY;
+	void *dstV;
+	int ret;
 
 	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = NULL;
@@ -975,15 +980,15 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 
 	dbg_stream("start jpegEncoding");
 
-	dstY = mmap(0, dst->size, PROT_READ | PROT_WRITE, MAP_SHARED,
-		    dst->share_fd, 0);
-	if (MAP_FAILED == dstY) {
-		ALOGE("failed to mmap for dstY");
-		return -EINVAL;
+	ret = module->lock(module, dst, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
+		   dst->width, dst->height, &dstV);
+	if (ret) {
+		ALOGE("failed to lock for dst");
+		return ret;
 	}
 
-	int ret = module->lock_ycbcr(module, src, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
-					src->width, src->height, &srcY);
+	ret = module->lock_ycbcr(module, src, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
+				 src->width, src->height, &srcY);
 	if (ret) {
 		ALOGE("Failed to lock for src");
 		module->unlock(module, dst);
@@ -991,20 +996,21 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 	}
 
 	dbg_stream("src: %p(%d) --> dst: %p(%d)", srcY.y, src->size,
-			   dstY, dst->size);
+			   dstV, dst->size);
 
 	/* make exif */
-	ExifProcessor *exifProcessor = new ExifProcessor();
 	ExifProcessor::ExifResult result =
-		exifProcessor->makeExif(src->width, src->height, src, mExif, dst);
+		mExifProcessor.makeExif(mAllocator, src->width, src->height, src, exif, dst);
+	mExifProcessor.clear();
 	int exifSize = result.getSize();
 	if (!exifSize) {
-		ALOGE("failed to make Exif");
+		ALOGE("Failed to make Exif");
 		ret = -EINVAL;
 		goto unlock;
 	}
 	dbg_stream("Exif size:%d", exifSize);
 
+	int skipSOI;
 	int jpegSize;
 	int jpegBufSize;
 	char *jpegBuf;
@@ -1013,24 +1019,30 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src)
 	planar[0] = (unsigned char*)srcY.y;
 	planar[1] = (unsigned char*)srcY.cb;
 	planar[2] = (unsigned char*)srcY.cr;
-	jpegSize = NX_JpegEncoding((unsigned char *)dstY+exifSize, src->size,
-					(unsigned char const *)planar, src->width,
-					src->height, srcY.ystride, srcY.cstride, 100,
-					NX_PIXFORMAT_YUV420);
+	jpegSize = NX_JpegEncoding((unsigned char *)dstV+exifSize, src->size,
+				   (unsigned char const *)planar, src->width,
+				   src->height, srcY.ystride, srcY.cstride, 100,
+				   NX_PIXFORMAT_YUV420);
 	if (jpegSize <= 0) {
-		ALOGE("failed to NX_JpegEncoding!!!");
+		ALOGE("Failed to NX_JpegEncoding!!!");
 		ret = -EINVAL;
 		goto unlock;
 	}
-	memcpy((unsigned char*)dstY+exifSize, (unsigned char*)dstY+exifSize+2/*SOI*/, jpegSize-2);
+	if (exifSize)
+		skipSOI = 2/*SOI*/;
+	else
+		skipSOI = 0;
+
+	jpegSize = jpegSize - skipSOI;
+	memcpy((unsigned char*)dstV+exifSize, (unsigned char*)dstV+exifSize + skipSOI, jpegSize);
 
 	jpegBufSize = dst->size;
-	jpegBuf = (char *) dstY;
+	jpegBuf = (char *) dstV;
 	jpegBlob = (camera3_jpeg_blob_t *)(&jpegBuf[jpegBufSize -
 						sizeof(camera3_jpeg_blob_t)]);
 	jpegBlob->jpeg_size = jpegSize + exifSize;
 	jpegBlob->jpeg_blob_id = CAMERA3_JPEG_BLOB_ID;
-	ALOGD("[DEBUG] capture success: jpegSize(%d), totalSize(%d)",
+	ALOGD("capture success: jpegSize(%d), totalSize(%d)",
 		jpegSize, jpegBlob->jpeg_size);
 	ret = 0;
 
