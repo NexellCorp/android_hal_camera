@@ -194,9 +194,14 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 				  new_stream->max_buffers,
 				  new_stream->usage);
 			new_stream->max_buffers = MAX_BUFFER_COUNT;
+			if ((new_stream->format ==
+				HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) ||
+				(new_stream->format == HAL_PIXEL_FORMAT_YCbCr_420_888))
+				new_stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
 		}
-		ALOGD("[%s] stream type = %d, max_buffer = %d",
-			  __func__, new_stream->stream_type, new_stream->max_buffers);
+		ALOGD("[%s] stream type = %d, max_buffer = %d, usage = 0x%x",
+			__func__, new_stream->stream_type, new_stream->max_buffers,
+			new_stream->usage);
 	}
 	/* stop is implicit */
 	if (mPreviewManager != NULL) {
