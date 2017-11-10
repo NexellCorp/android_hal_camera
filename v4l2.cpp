@@ -105,7 +105,6 @@ int v4l2_streamon(int fd)
 	uint32_t buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
 	ALOGD("[%s]\n", __func__);
-
 	return ioctl(fd, VIDIOC_STREAMON, &buf_type);
 }
 
@@ -117,21 +116,38 @@ int v4l2_streamoff(int fd)
 	return ioctl(fd, VIDIOC_STREAMOFF, &buf_type);
 }
 
-int v4l2_get_frameinterval(int fd, struct v4l2_frame_interval *f)
+int v4l2_get_framesize(int fd, struct v4l2_frame_interval *f)
+{
+	struct v4l2_frmsizeenum frame;
+	int ret = 0;
+
+	ALOGD("[%s] index:%d", __func__, f->index);
+	frame.index = f->index;
+	ret = ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frame);
+	if (!ret) {
+		f->width = frame.stepwise.max_width;
+		f->height = frame.stepwise.max_height;
+		ALOGD("[%s] index:%d, width:%d, height:%d", __func__,
+		      f->index, f->width, f->height);
+	} else
+		ALOGE("[%s] failed to get frame size ret:%d", __func__, ret);
+	return ret;
+}
+
+int v4l2_get_frameinterval(int fd, struct v4l2_frame_interval *f, int minOrMax)
 {
 	struct v4l2_frmivalenum frame;
 	int ret;
 
 	ALOGD("[%s] index:%d", __func__, f->index);
-	frame.index = f->index;
+	frame.index = minOrMax;
+	frame.width = f->width;
+	frame.height = f->height;
 	ret = ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &frame);
 	if (!ret) {
-		f->width = frame.width;
-		f->height = frame.height;
-		f->interval = frame.discrete.numerator/
-				  frame.discrete.denominator;
+		f->interval[frame.index] = frame.discrete.denominator;
 		ALOGD("index:%d, width:%d, height:%d, interval:%d",
-			f->index, f->width, f->height, f->interval);
+			f->index, f->width, f->height, f->interval[frame.index]);
 	} else
 		ALOGE("failed to get frame interval information :%d", ret);
 	return ret;

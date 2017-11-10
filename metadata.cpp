@@ -3,17 +3,34 @@ namespace android {
 #define MAX_SUPPORTED_RESOLUTION 64
 #define MAX_SYNC_LATENCY 4
 
+static int32_t checkMinFps(uint32_t count, struct v4l2_frame_interval *f)
+{
+	uint32_t i;
+	uint32_t min = f[0].interval[V4L2_INTERVAL_MIN];
+
+	if (count == 1)
+		return min;
+
+	for (i = 1; i < count; i++) {
+		if (f[i].interval[V4L2_INTERVAL_MIN] >
+		    f[i-1].interval[V4L2_INTERVAL_MIN])
+			min = f[i].interval[V4L2_INTERVAL_MIN];
+	}
+	return min;
+}
+
 static int32_t checkMaxFps(uint32_t count, struct v4l2_frame_interval *f)
 {
 	uint32_t i;
-	uint32_t max = f[0].interval;
+	uint32_t max = f[0].interval[V4L2_INTERVAL_MAX];
 
 	if (count == 1)
 		return max;
 
 	for (i = 1; i < count; i++) {
-		if (f[i].interval > f[i-1].interval)
-			max = f[i].interval;
+		if (f[i].interval[V4L2_INTERVAL_MAX] >
+		    f[i-1].interval[V4L2_INTERVAL_MAX])
+			max = f[i].interval[V4L2_INTERVAL_MAX];
 	}
 	return max;
 }
@@ -31,6 +48,39 @@ static int32_t checkMaxJpegSize(uint32_t count, struct v4l2_frame_interval *f)
 			max = (f[i].width * f[i].height)*3;
 	}
 	return max;
+}
+
+static uint32_t getFrameInfo(int fd, struct v4l2_frame_interval *frames)
+{
+	int r = 0, ret = 0;
+
+	for (int j = 0; j < MAX_SUPPORTED_RESOLUTION; j++) {
+		if (ret)
+			break;
+		frames[r].index = j;
+		ret = v4l2_get_framesize(fd, &frames[r]);
+		if (!ret) {
+			ALOGD("[%d] width:%d, height:%d",
+			      r, frames[r].width, frames[r].height);
+			if ((frames[r].width % 32) == 0) {
+				for (int i = 0; i <= V4L2_INTERVAL_MAX; i++) {
+					ret = v4l2_get_frameinterval(fd,
+								     &frames[r],
+								     i);
+					if (ret) {
+						ALOGE("Failed to get interval for width:%d, height:%d",
+						      frames[r].width, frames[r].height);
+						return r;
+					}
+					ALOGD("width:%d, height:%d, %s interval:%d",
+					      frames[r].width, frames[r].height,
+					      (i) ? "max":"min", frames[r].interval[i]);
+				}
+				r++;
+			}
+		}
+	}
+	return r;
 }
 
 const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
@@ -61,7 +111,8 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 	staticInfo.update(ANDROID_SENSOR_ORIENTATION,
 			  &sensor_orientation, 1);
 
-	uint8_t lensFacing = (!camera_id) ? ANDROID_LENS_FACING_BACK : ANDROID_LENS_FACING_FRONT;
+	uint8_t lensFacing = (!camera_id) ?
+		ANDROID_LENS_FACING_BACK : ANDROID_LENS_FACING_FRONT;
 	staticInfo.update(ANDROID_LENS_FACING, &lensFacing, 1);
 	float focal_lengths = 3.43f;
 	staticInfo.update(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS,
@@ -100,29 +151,12 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 			  physical_size, 2);
 
 	struct v4l2_frame_interval frames[MAX_SUPPORTED_RESOLUTION];
-	int ret = 0;
-	int r = 0;
-	while(!ret) {
-		if (r == MAX_SUPPORTED_RESOLUTION) {
-			ALOGE("supported resolutions count is bigger than MAX_SUPPORTED_RESOLUTION:%d",
-				MAX_SUPPORTED_RESOLUTION);
-			break;
-		}
-		frames[r].index = r;
-		ret = v4l2_get_frameinterval(fd, &frames[r]);
-		if (!ret) {
-			ALOGI("[%d] width:%d, height:%d, interval:%d",
-			      r, frames[r].width, frames[r].height,
-			      frames[r].interval);
-			r++;
-		}
-	}
+	int r = getFrameInfo(fd, frames);
 	ALOGD("[%s] supported resolutions count:%d", __func__, r);
 	if (!r) {
 		ALOGE("sensor resolution value is invalid");
 		return NULL;
 	}
-
 	/* pixel size for preview and still capture */
 	int32_t pixel_array_size[2] = {frames[0].width, frames[0].height};
 	staticInfo.update(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
@@ -136,8 +170,9 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 			  active_array_size, 4);
 
 	int32_t max_fps = checkMaxFps(r, frames);
+	int32_t min_fps = checkMinFps(r, frames);
 	int32_t available_fps_ranges[] = {
-		15, max_fps, 30, 30
+		min_fps, max_fps, max_fps, max_fps
 	};
 	staticInfo.update(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES,
 			  available_fps_ranges,
