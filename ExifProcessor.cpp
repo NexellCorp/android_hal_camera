@@ -246,10 +246,12 @@ bool ExifProcessor::scaleDown()
 	dst_y_stride = dst.ystride;
 	dst_c_stride = dst.cstride;
 
-	ctx.crop.x = 0;
-	ctx.crop.y = 0;
-	ctx.crop.width = Width;
-	ctx.crop.height = Height;
+	ctx.crop.x = Exif->cropX;
+	ctx.crop.y = Exif->cropY;
+	ctx.crop.width = Exif->cropWidth;
+	ctx.crop.height = Exif->cropHeight;
+	ALOGD("[CROP] crop x:%d, y:%d, width:%d, height:%d",
+	      ctx.crop.x, ctx.crop.y, ctx.crop.width, ctx.crop.height);
 
 	ctx.src_plane_num = 1;
 	ctx.src_width = SrcHandle->width;

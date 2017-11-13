@@ -119,7 +119,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 			  &focal_lengths, 1);
 
 	/* Zoom */
-	float maxZoom = 1;
+	float maxZoom = 4;
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM,
 			  &maxZoom, 1);
 
@@ -285,7 +285,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 			available_frame_min_durations[offset] = scaler_formats[f];
 			available_frame_min_durations[1+offset] = frames[j].width;
 			available_frame_min_durations[2+offset] = frames[j].height;
-			available_frame_min_durations[3+offset] = available_fps_ranges[0];
+			available_frame_min_durations[3+offset] = frames[j].interval[V4L2_INTERVAL_MIN];
 		}
 	}
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS,

@@ -116,9 +116,12 @@ private:
 
 class StreamManager : public Thread {
 public:
-	StreamManager(int fd, const camera3_callback_ops_t *callbacks, alloc_device_t *allocator)
+	StreamManager(int fd, int scalerFd, const camera3_callback_ops_t *callbacks,
+		      alloc_device_t *allocator)
 		: mFd(fd),
+		  mScalerFd(scalerFd),
 		  mCallbacks(callbacks), mSize(0), mQIndex(0),
+		  mScaleBuffer(NULL),
 		  mPrevFrameNumber(0),
 		  mPipeLineDepth(0),
 		  mMetaInfo(NULL),
@@ -150,6 +153,7 @@ protected:
 
 private:
 	int mFd;
+	int mScalerFd;
 	const camera3_callback_ops_t *mCallbacks;
 	uint32_t mSize;
 	int mQIndex;
@@ -161,6 +165,7 @@ private:
 	NXQueue<NXCamera3Buffer *> mRQ; /* return q: hal --> service */
 	Mutex mLock;
 	NXCamera3Buffer mBuffers[MAX_BUFFER_COUNT+2];
+	buffer_handle_t *mScaleBuffer;
 	uint32_t mPrevFrameNumber;
 	uint32_t mPipeLineDepth;
 	const camera_metadata_t *mMetaInfo;
@@ -168,11 +173,15 @@ private:
 	ExifProcessor mExifProcessor;
 
 private:
+	int allocBuffer(uint32_t w, uint32_t h, uint32_t format,
+			buffer_handle_t **handle);
+	int scaling(private_handle_t *src, const camera_metadata_t *request);
 	int setBufferFormat(private_handle_t *h);
 	int sendResult(bool drain = false);
 	void stopV4l2();
 	int copyBuffer(private_handle_t *dst, private_handle_t *src);
-	int jpegEncoding(private_handle_t *dst, private_handle_t *src, exif_attribute_t *exif);
+	int jpegEncoding(private_handle_t *dst, private_handle_t *src,
+			 exif_attribute_t *exif);
 	camera_metadata_t* translateMetadata(const camera_metadata_t *request,
 					     exif_attribute_t *mExif,
 					     nsecs_t timestamp,

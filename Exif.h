@@ -349,6 +349,10 @@ struct exif_attribute_t {
 	widthThumb = 0;
 	heightThumb = 0;
 	orientation = 0;
+	cropX = 0;
+	cropY = 0;
+	cropWidth = 0;
+	cropHeight = 0;
     }
 
     bool setThumbResolution(const uint32_t& widthThumb, const uint32_t& heightThumb) {
@@ -366,6 +370,19 @@ struct exif_attribute_t {
             return true;
         }
         return false;
+    }
+
+    bool setCropResolution(const uint32_t& x, const uint32_t& y,
+			   const uint32_t& widthCrop, const uint32_t& heightCrop) {
+	    if ((widthCrop != this->cropWidth) || (heightCrop != this->cropHeight) ||
+		    (x != cropX || y != cropY)) {
+			    this->cropX = x;
+			    this->cropY = y;
+			    this->cropWidth = widthCrop;
+			    this->cropHeight = heightCrop;
+			    return true;
+		    }
+	    return false;
     }
 
     bool setOrientation(const uint32_t& orientation) {
@@ -474,6 +491,10 @@ typedef struct {
     uint32_t widthThumb;
     uint32_t heightThumb;
     uint32_t thumbnailQuality;
+    uint32_t cropX;
+    uint32_t cropY;
+    uint32_t cropWidth;
+    uint32_t cropHeight;
 
     uint16_t orientation;
     uint16_t ycbcr_positioning;

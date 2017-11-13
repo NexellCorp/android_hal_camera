@@ -49,6 +49,7 @@ private:
 	int mCameraId;
 	const camera3_callback_ops_t *mCallbacks;
 	int mPreviewHandle;
+	int mScalerHandle;
 	alloc_device_t *mAllocator;
 	const camera_metadata_t *mRequestMetadata[CAMERA3_TEMPLATE_MANUAL] =
 		{NULL, NULL, NULL, NULL, NULL};

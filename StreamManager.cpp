@@ -6,8 +6,10 @@
 #include <hardware/camera3.h>
 
 #include <linux/videodev2.h>
+#include <linux/media-bus-format.h>
 #include <libnxjpeg.h>
 
+#include <nx-scaler.h>
 #include "v4l2.h"
 #include "Exif.h"
 #include "ExifProcessor.h"
@@ -22,7 +24,8 @@ namespace android {
 #define dbg_stream(a...)
 #endif
 
-int StreamManager::allocBuffer(uint32_t w, uint32_t h, buffer_handle_t **p)
+int StreamManager::allocBuffer(uint32_t w, uint32_t h, uint32_t format,
+			       buffer_handle_t **p)
 {
 	if (mAllocator == NULL) {
 		ALOGE("Allocator is NULL");
@@ -42,7 +45,7 @@ int StreamManager::allocBuffer(uint32_t w, uint32_t h, buffer_handle_t **p)
 	if (pHandle == NULL)
 		return -ENOMEM;
 
-	ret = mAllocator->alloc(mAllocator, w, h, HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
+	ret = mAllocator->alloc(mAllocator, w, h, format,
 			    PROT_READ | PROT_WRITE, pHandle, &stride);
 	if (ret) {
 		ALOGE("Failed to alloc a buffer:%d", ret);
@@ -52,6 +55,113 @@ int StreamManager::allocBuffer(uint32_t w, uint32_t h, buffer_handle_t **p)
 	*p = pHandle;
 
 	return 0;
+}
+
+int StreamManager::scaling(private_handle_t *srcBuf,
+			   const camera_metadata_t *request)
+{
+	CameraMetadata meta;
+	CameraMetadata metaData;
+	uint32_t cropX;
+	uint32_t cropY;
+	uint32_t cropWidth;
+	uint32_t cropHeight;
+
+	meta  = request;
+
+	if (meta.exists(ANDROID_SCALER_CROP_REGION)) {
+		cropX = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[0];
+		cropY = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[1];
+		cropWidth = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[2];
+		cropHeight = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[3];
+		dbg_stream("CROP: left:%d, top:%d, width:%d, height:%d",
+			   cropX, cropY, cropWidth, cropHeight);
+	} else {
+		cropX = 0;
+		cropY = 0;
+		cropWidth = srcBuf->width;
+		cropHeight = srcBuf->height;
+	}
+/*
+	if (((cropWidth - cropX) == srcBuf->width) &&
+	    ((cropHeight - cropY) == srcBuf->height))
+		return true;
+*/
+	if (mScalerFd < 0) {
+		ALOGE("scaler fd is invalid");
+		return -ENODEV;
+	}
+
+	ALOGD("[%s] start scaling", __func__);
+
+	hw_module_t const *pmodule = NULL;
+	gralloc_module_t const *module = NULL;
+	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
+	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
+	android_ycbcr src, dst;
+	private_handle_t *dstBuf = NULL;
+	struct nx_scaler_context ctx;
+	int ret = 0;
+
+	dstBuf = (private_handle_t*)*mScaleBuffer;
+	ret = module->lock_ycbcr(module, srcBuf, PROT_READ | PROT_WRITE, 0, 9,
+				 srcBuf->width, srcBuf->height, &src);
+	if (ret) {
+		ALOGE("Failed to lock_ycbcr for the buf - %d", srcBuf->share_fd);
+		goto exit;
+	}
+
+	ret = module->lock_ycbcr(module, dstBuf, PROT_READ | PROT_WRITE, 0, 9,
+				 dstBuf->width, dstBuf->height, &dst);
+	if (ret) {
+		ALOGE("Failed to lock_ycbcr for the buf - %d", dstBuf->share_fd);
+		goto exit;
+	}
+
+	ctx.crop.x = cropX;
+	ctx.crop.y = cropY;
+	ctx.crop.width = cropWidth;
+	ctx.crop.height = cropHeight;
+
+	ctx.src_plane_num = 1;
+	ctx.src_width = srcBuf->width;
+	ctx.src_height = srcBuf->height;
+	ctx.src_code = MEDIA_BUS_FMT_YUYV8_2X8;
+	ctx.src_fds[0] = srcBuf->share_fd;
+	ctx.src_stride[0] = src.ystride;
+	ctx.src_stride[1] = src.cstride;
+	ctx.src_stride[2] = src.cstride;
+
+	ctx.dst_plane_num = 1;
+	ctx.dst_width = dstBuf->width;
+	ctx.dst_height = dstBuf->height;
+	ctx.dst_code = MEDIA_BUS_FMT_YUYV8_2X8;
+	ctx.dst_fds[0] = dstBuf->share_fd;
+	ctx.dst_stride[0] = dst.ystride;
+	ctx.dst_stride[1] = dst.cstride;
+	ctx.dst_stride[2] = dst.cstride;
+
+	ret = nx_scaler_run(mScalerFd, &ctx);
+	if (ret < 0) {
+		ALOGE("[%s] Failed to scaler set & run ioctl", __func__);
+		goto unlock;
+	}
+	memcpy(src.y, dst.y, srcBuf->size);
+
+unlock:
+	if (module ) {
+		ret = module->unlock(module, srcBuf);
+		if (ret)
+			ALOGE("[%s] Failed to gralloc unlock for srcBuf:%d",
+			      __func__, ret);
+		ret = module->unlock(module, dstBuf);
+		if (ret)
+			ALOGE("[%s] Failed to gralloc unlock for dstBuf:%d",
+			      __func__, ret);
+	}
+
+exit:
+	return ret;
 }
 
 int StreamManager::registerRequest(camera3_capture_request_t *r)
@@ -87,7 +197,9 @@ int StreamManager::registerRequest(camera3_capture_request_t *r)
 				prev = (camera3_stream_buffer_t *)malloc(sizeof(camera3_stream_buffer_t));
 				if (prev == NULL)
 					return -ENOMEM;
-				allocBuffer(704, 480, &prev->buffer);
+				allocBuffer(ph->width, ph->height,
+					    HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
+					    &prev->buffer);
 				if (prev->buffer == NULL) {
 					if (prev)
 						free(prev);
@@ -194,6 +306,20 @@ status_t StreamManager::readyToRun()
 		drainBuffer();
 		return ret;
 	}
+
+#ifdef CAMERA_USE_ZOOM
+	buffer_handle_t *buffer = NULL;
+	buffer = (buffer_handle_t *)malloc(sizeof(buffer_handle_t));
+	if (buffer == NULL)
+		return -ENOMEM;
+	allocBuffer(ph->width, ph->height, ph->format, &buffer);
+	if (*buffer == NULL) {
+		ALOGE("[%s] failed to alloc new Buffer for scaling", __func__);
+		free(buffer);
+		return -ENOMEM;
+	}
+	mScaleBuffer = buffer;
+#endif
 
 	ret = v4l2_req_buf(mFd, MAX_BUFFER_COUNT);
 	if (ret) {
@@ -378,8 +504,8 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 
 	meta = request;
 
-	dbg_stream("[%s] frame_number:%d, timestamp:%ld, pipeline:%d", __func__,
-		   frame_number, timestamp, pipeline_depth);
+	dbg_stream("[%s] timestamp:%ld, pipeline:%d", __func__,
+		   timestamp, pipeline_depth);
 
 	if (meta.exists(ANDROID_REQUEST_ID)) {
 		int32_t request_id = meta.find(ANDROID_REQUEST_ID).data.i32[0];
@@ -584,7 +710,14 @@ StreamManager::translateMetadata(const camera_metadata_t *request,
 			   scalerCropRegion[0], scalerCropRegion[1], scalerCropRegion[2],
 			   scalerCropRegion[3]);
 		metaData.update(ANDROID_SCALER_CROP_REGION, scalerCropRegion, 4);
+		if (mExif)
+			mExif->setCropResolution(scalerCropRegion[0], scalerCropRegion[1],
+						 scalerCropRegion[2], scalerCropRegion[3]);
+	} else {
+		if (mExif)
+			mExif->setCropResolution(0, 0, 0, 0);
 	}
+
 	if (meta.exists(ANDROID_SENSOR_EXPOSURE_TIME)) {
 		 int64_t sensorExpTime =
 			meta.find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
@@ -836,6 +969,11 @@ int StreamManager::sendResult(bool drain)
 	result.result = translateMetadata(buf->getMetadata(),
 					  exif, timestamp, mPipeLineDepth);
 
+#ifdef CAMERA_USE_ZOOM
+	if (buf->getStream(PREVIEW_STREAM) != NULL)
+		scaling((private_handle_t*)*buf->getBuffer(PREVIEW_STREAM), buf->getMetadata());
+#endif
+
 	camera3_stream_buffer_t output_buffer[MAX_STREAM];
 	uint32_t index = 0;
 
@@ -926,6 +1064,10 @@ void StreamManager::stopStreaming()
 	}
 
 	stopV4l2();
+	if ((mAllocator) && (mScaleBuffer))
+		mAllocator->free(mAllocator, (buffer_handle_t )*mScaleBuffer);
+	if (mScaleBuffer)
+		free(mScaleBuffer);
 	// drainBuffer();
 
 	/* check last buffer */
@@ -1089,8 +1231,7 @@ int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)
 			   dstY.y, dst->size);
 
 	if ((src->width == dst->width) && (src->height == dst->height)) {
-		if ((src->format == dst->format) && (srcY.ystride == dstY.ystride) &&
-		   (srcY.cstride == dstY.cstride))
+		if ((srcY.cstride == dstY.cstride) && (srcY.cstride == dstY.cstride))
 			memcpy(dstY.y, srcY.y, src->size);
 		else {
 			dbg_stream("src and dst buffer has a different alingment");
