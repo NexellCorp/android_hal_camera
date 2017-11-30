@@ -1,4 +1,4 @@
-#define LOG_TAG "Camera3HWInterface"
+#define LOG_TAG "NXCamera3HWInterface"
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -13,8 +13,9 @@
 #include <hardware/camera3.h>
 #include <camera/CameraMetadata.h>
 
-#include <nx-scaler.h>
+#include "GlobalDef.h"
 #include "v4l2.h"
+#include "StreamManager.h"
 #include "Camera3HWInterface.h"
 
 #define getPriv(dev) ((Camera3HWInterface *)(((camera3_device_t *)dev)->priv))
@@ -27,10 +28,10 @@ namespace android {
 const camera_metadata_t *gStaticMetadata[NUM_OF_CAMERAS] = {0, };
 
 /**
- * Camera3 callback ops
- */
+* Camera3 callback ops
+*/
 static int initialize(const struct camera3_device *device,
-					  const camera3_callback_ops_t *callback_ops)
+		const camera3_callback_ops_t *callback_ops)
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
@@ -41,11 +42,11 @@ static int initialize(const struct camera3_device *device,
 }
 
 /*
- * Override camera3_stream attributes
- * Currently only override max_buffers
- */
+* Override camera3_stream attributes
+* Currently only override max_buffers
+*/
 static int configureStreams(const struct camera3_device *device,
-							camera3_stream_configuration_t *stream_list)
+		camera3_stream_configuration_t *stream_list)
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
@@ -57,7 +58,7 @@ static int configureStreams(const struct camera3_device *device,
 
 static const camera_metadata_t*
 constructDefaultRequestSettings(const struct camera3_device *device,
-								int type)
+		int type)
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
@@ -68,7 +69,7 @@ constructDefaultRequestSettings(const struct camera3_device *device,
 }
 
 static int processCaptureRequest(const struct camera3_device *device,
-								 camera3_capture_request_t *request)
+		camera3_capture_request_t *request)
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
@@ -89,17 +90,17 @@ static int flush(const struct camera3_device *device)
 }
 
 extern "C" {
-camera3_device_ops_t camera3Ops = {
-	.initialize							= initialize,
-	.configure_streams					= configureStreams,
-	.construct_default_request_settings = constructDefaultRequestSettings,
-	.process_capture_request			= processCaptureRequest,
-	.flush								= flush,
-	.register_stream_buffers			= NULL,
-	.dump								= NULL,
-	.get_metadata_vendor_tag_ops		= NULL,
-	.reserved							= {0,},
-};
+	camera3_device_ops_t camera3Ops = {
+		.initialize			    = initialize,
+		.configure_streams		    = configureStreams,
+		.construct_default_request_settings = constructDefaultRequestSettings,
+		.process_capture_request	    = processCaptureRequest,
+		.flush				    = flush,
+		.register_stream_buffers	    = NULL,
+		.dump				    = NULL,
+		.get_metadata_vendor_tag_ops	    = NULL,
+		.reserved			    = {0,},
+	};
 }
 
 static int cameraClose(struct hw_device_t* device);
@@ -107,10 +108,8 @@ static int cameraClose(struct hw_device_t* device);
 Camera3HWInterface::Camera3HWInterface(int cameraId)
 	: mCameraId(cameraId),
 	mCallbacks(NULL),
-	mPreviewHandle(-1),
-	mScalerHandle(-1),
 	mAllocator(NULL),
-	mPreviewManager(NULL)
+	mStreamManager(NULL)
 {
 	memset(&mCameraDevice, 0x0, sizeof(camera3_device_t));
 
@@ -142,25 +141,30 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
 	if (fd < 0) {
 		ALOGE("Failed to open %s camera :%d",
-			(mCameraId) ? "Front"  : "Back", fd);
+				(mCameraId) ? "Front"  : "Back", fd);
 		return -ENODEV;
 	}
-	mPreviewHandle = fd;
+	mHandles[0] = fd;
+	ALOGD("mHandle[0] = %d", fd);
+	if (MAX_VIDEO_HANDLES > 1) {
+		if (mCameraId == 0)
+			fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
+		else
+			fd = open(BACK_CAMERA_DEVICE, O_RDWR);
+		if (fd < 0) {
+			ALOGE("Failed to open %s camera :%d",
+					(!mCameraId) ? "Front"  : "Back", fd);
+			return -ENODEV;
+		}
+		mHandles[1] = fd;
+		ALOGD("mHandle[1] = %d", fd);
+	}
 
 	mCallbacks = callback;
 	for (int j = 0; j < CAMERA3_TEMPLATE_MANUAL; j++) {
 		mRequestMetadata[j] = NULL;
 		ALOGD("mRequestMetadata[%d] = %p\n", j, mRequestMetadata[j]);
 	}
-
-#ifdef CAMERA_USE_ZOOM
-	fd = scaler_open();
-	if (fd < 0) {
-		ALOGE("Failed to open scaler");
-		return -ENODEV;
-	}
-	mScalerHandle = fd;
-#endif
 
 	if (mAllocator == NULL) {
 		hw_device_t *dev = NULL;
@@ -188,51 +192,50 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 	}
 
 	ALOGD("[%s] operation_mode:%d, num_streams:%d", __func__,
-	      stream_list->operation_mode, stream_list->num_streams);
+			stream_list->operation_mode, stream_list->num_streams);
 	for (size_t i = 0; i < stream_list->num_streams; i++) {
 		camera3_stream_t *new_stream = stream_list->streams[i];
 
 		if (new_stream->rotation) {
 			ALOGE("[%s] rotation is not supported:%d", __func__,
-				  new_stream->rotation);
+					new_stream->rotation);
 			return -EINVAL;
 		}
 
 		if ((new_stream->stream_type == CAMERA3_STREAM_OUTPUT) ||
-			(new_stream->stream_type == CAMERA3_STREAM_BIDIRECTIONAL)) {
+				(new_stream->stream_type == CAMERA3_STREAM_BIDIRECTIONAL)) {
 			ALOGD("[%zu] format:0x%x, width:%d, height:%d, max buffers:%d, usage:0x%x",
-				  i, new_stream->format, new_stream->width, new_stream->height,
-				  new_stream->max_buffers,
-				  new_stream->usage);
+					i, new_stream->format, new_stream->width, new_stream->height,
+					new_stream->max_buffers,
+					new_stream->usage);
 			new_stream->max_buffers = MAX_BUFFER_COUNT;
 			if ((new_stream->format ==
-				HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) ||
-				(new_stream->format == HAL_PIXEL_FORMAT_YCbCr_420_888))
+						HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) ||
+					(new_stream->format == HAL_PIXEL_FORMAT_YCbCr_420_888))
 				new_stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
 		}
 		ALOGD("[%s] stream type = %d, max_buffer = %d, usage = 0x%x",
-			__func__, new_stream->stream_type, new_stream->max_buffers,
-			new_stream->usage);
-	}
-	/* stop is implicit */
-	if (mPreviewManager != NULL) {
-		ALOGD("==================================================");
-		mPreviewManager->stopStreaming();
-		// TODO: check destructor
-		mPreviewManager = NULL;
+				__func__, new_stream->stream_type, new_stream->max_buffers,
+				new_stream->usage);
 	}
 
-	if (mPreviewManager == NULL) {
+	if (mStreamManager != NULL) {
+		ALOGD("==================================================");
+		mStreamManager->stopStream();
+		// TODO: check destructor
+		mStreamManager = NULL;
+	}
+
+	if (mStreamManager == NULL) {
 		ALOGD("new Stream");
 		ALOGD("==================================================");
-		mPreviewManager = new StreamManager(mPreviewHandle, mScalerHandle,
-						    mCallbacks, mAllocator);
-		if (mPreviewManager == NULL) {
+		mStreamManager = new StreamManager(mHandles, mAllocator, mCallbacks);
+		if (mStreamManager == NULL) {
 			ALOGE("Failed to construct StreamManager for preview");
 			return -ENOMEM;
 		}
+		mStreamManager->configureStreams(stream_list);
 	}
-
 	return 0;
 }
 
@@ -269,70 +272,70 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	uint8_t cacMode;
 
 	switch (type) {
-	case CAMERA3_TEMPLATE_PREVIEW:
-		ALOGD("[%s] CAMERA3_TEMPLATE_PREVIEW:%d", __func__, type);
-		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
-		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
-		break;
+		case CAMERA3_TEMPLATE_PREVIEW:
+			ALOGD("[%s] CAMERA3_TEMPLATE_PREVIEW:%d", __func__, type);
+			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
+			antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
+			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+			break;
 
-	case CAMERA3_TEMPLATE_STILL_CAPTURE:
-		ALOGD("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE:%d", __func__, type);
-		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
-		break;
+		case CAMERA3_TEMPLATE_STILL_CAPTURE:
+			ALOGD("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE:%d", __func__, type);
+			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
+			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
+			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+			break;
 
-	case CAMERA3_TEMPLATE_VIDEO_RECORD:
-		ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD:%d", __func__, type);
-		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
-		break;
+		case CAMERA3_TEMPLATE_VIDEO_RECORD:
+			ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD:%d", __func__, type);
+			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
+			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+			break;
 
-	case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
-		ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:%d", __func__, type);
-		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
-		break;
+		case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
+			ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:%d", __func__, type);
+			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
+			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+			break;
 
-	case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
-		ALOGD("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:%d", __func__, type);
-		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
-		focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
-		break;
+		case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
+			ALOGD("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:%d", __func__, type);
+			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
+			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+			break;
 
-	case CAMERA3_TEMPLATE_MANUAL:
-		ALOGD("[%s] CAMERA3_TEMPLATE_MANUAL:%d", __func__, type);
-		controlIntent =ANDROID_CONTROL_CAPTURE_INTENT_MANUAL;
-		//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
-		controlMode = ANDROID_CONTROL_MODE_OFF;
-		focusMode = ANDROID_CONTROL_AF_MODE_OFF;
-		aeMode = ANDROID_CONTROL_AE_MODE_OFF;
-		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
-		break;
-	default:
-		ALOGD("[%s] not supported", __func__);
-		controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_CUSTOM;
-		//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
-		controlMode = ANDROID_CONTROL_MODE_OFF;
-		focusMode = ANDROID_CONTROL_AF_MODE_OFF;
-		aeMode = ANDROID_CONTROL_AE_MODE_OFF;
-		antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_OFF;
-		cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_OFF;
-		colorMode = ANDROID_COLOR_CORRECTION_MODE_TRANSFORM_MATRIX;
-		optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
-		break;
+		case CAMERA3_TEMPLATE_MANUAL:
+			ALOGD("[%s] CAMERA3_TEMPLATE_MANUAL:%d", __func__, type);
+			controlIntent =ANDROID_CONTROL_CAPTURE_INTENT_MANUAL;
+			//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+			controlMode = ANDROID_CONTROL_MODE_OFF;
+			focusMode = ANDROID_CONTROL_AF_MODE_OFF;
+			aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+			antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
+			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
+			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+			break;
+		default:
+			ALOGD("[%s] not supported", __func__);
+			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_CUSTOM;
+			//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+			controlMode = ANDROID_CONTROL_MODE_OFF;
+			focusMode = ANDROID_CONTROL_AF_MODE_OFF;
+			aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+			antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_OFF;
+			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_OFF;
+			colorMode = ANDROID_COLOR_CORRECTION_MODE_TRANSFORM_MATRIX;
+			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+			break;
 	}
 
 	metaData.update(ANDROID_CONTROL_CAPTURE_INTENT, &controlIntent, 1);
@@ -352,9 +355,9 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	metaData.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vsMode, 1);
 
 	/* Face Detect Mode */
-        /* For CTS : android.hardware.camera2.cts.CameraDeviceTest#testCameraDeviceManualTemplate */
-        uint8_t facedetect_mode = ANDROID_STATISTICS_FACE_DETECT_MODE_OFF;
-        metaData.update(ANDROID_STATISTICS_FACE_DETECT_MODE, &facedetect_mode, 1);
+	/* For CTS : android.hardware.camera2.cts.CameraDeviceTest#testCameraDeviceManualTemplate */
+	uint8_t facedetect_mode = ANDROID_STATISTICS_FACE_DETECT_MODE_OFF;
+	metaData.update(ANDROID_STATISTICS_FACE_DETECT_MODE, &facedetect_mode, 1);
 
 	/*precapture trigger*/
 	uint8_t precapture_trigger = ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
@@ -367,9 +370,9 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	uint8_t  shadingMapMode = ANDROID_SHADING_MODE_OFF;
 	metaData.update(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE, &shadingMapMode, 1);
 
-        int32_t exposureCompensation = 0;
-        metaData.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION,
-                        &exposureCompensation, 1);
+	int32_t exposureCompensation = 0;
+	metaData.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION,
+			&exposureCompensation, 1);
 
 	/*flash */
 	uint8_t flashMode = ANDROID_FLASH_MODE_OFF;
@@ -406,8 +409,8 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	/* Fps range */
 	/* For CTS : android.hardware.camera2.cts.CameraDeviceTest#testCameraDeviceManualTemplate */
 	/*target fps range: use maximum range for picture, and maximum fixed range for video*/
-        int32_t available_fps_ranges[2] = {0, 0};
-        if (meta.exists(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)) {
+	int32_t available_fps_ranges[2] = {0, 0};
+	if (meta.exists(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)) {
 		if ((type == CAMERA3_TEMPLATE_VIDEO_RECORD) || (type == CAMERA3_TEMPLATE_VIDEO_SNAPSHOT)) {
 			available_fps_ranges[0] =
 				meta.find(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).data.i32[2];
@@ -431,7 +434,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		sizes[3] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[3];
 	}
 	ALOGD("ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE-%d:%d:%d:%d",
-	      sizes[0], sizes[1], sizes[2], sizes[3]);
+			sizes[0], sizes[1], sizes[2], sizes[3]);
 	metaData.update(ANDROID_SCALER_CROP_REGION, sizes, 4);
 
 	/* frame duration */
@@ -457,7 +460,7 @@ int Camera3HWInterface::sendResult(void)
 }
 
 int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * request,
-					       bool firstRequest)
+		bool firstRequest)
 {
 	int ret = -EINVAL;
 	const camera3_stream_buffer_t *buf;
@@ -471,14 +474,14 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * reque
 
 	if ((firstRequest) && (request->settings == NULL)) {
 		ALOGE("[%s] meta info can't be NULL for the first request",
-		      __func__);
+				__func__);
 		return ret;
 	}
 
 	if ((request->num_output_buffers < 1) ||
-		(request->output_buffers == NULL)) {
-		 ALOGE("[%s] output buffer is NULL", __FUNCTION__);
-		 return ret;
+			(request->output_buffers == NULL)) {
+		ALOGE("[%s] output buffer is NULL", __FUNCTION__);
+		return ret;
 	}
 
 	for (uint32_t i = 0; i < request->num_output_buffers; i++) {
@@ -490,12 +493,12 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * reque
 		if (buf->status != CAMERA3_BUFFER_STATUS_OK) {
 			ALOGE("[Buffer:%d] status is not OK\n", i);
 			sendResult();
-                        return ret;
-                }
+			return ret;
+		}
 		if (buf->buffer == NULL) {
-                        ALOGE("[Buffer:%d] buffer handle is NULL\n", i);
-                        return ret;
-                }
+			ALOGE("[Buffer:%d] buffer handle is NULL\n", i);
+			return ret;
+		}
 		if (*(buf->buffer) == NULL) {
 			ALOGE("[Buffer:%d] private handle is NULL\n", i);
 			return ret;
@@ -507,7 +510,7 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * reque
 int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request)
 {
 	int ret = NO_ERROR;
-	bool firstRequest = (mPreviewManager != NULL) ? false: true;
+	bool firstRequest = (mStreamManager != NULL) ? false: true;
 
 	ret = validateCaptureRequest(request, firstRequest);
 	if (ret) {
@@ -518,32 +521,13 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 	if (request->input_buffer != NULL)
 		ALOGE("We can't support input buffer!!!");
 
-	CameraMetadata meta;
-	meta = request->settings;
-	if (meta.exists(ANDROID_REQUEST_ID)) {
-		int32_t request_id = meta.find(ANDROID_REQUEST_ID).data.i32[0];
-		ALOGD("[%s] requestId:%d", __func__, request_id);
-		if (mPreviewManager != NULL)
-			mPreviewManager->setPrevFrameNumber(0);
-	}
-
-	/* preview, record, capture: called once per stream */
-	if (meta.exists(ANDROID_CONTROL_CAPTURE_INTENT)) {
-		uint8_t captureIntent =
-			meta.find(ANDROID_CONTROL_CAPTURE_INTENT).data.u8[0];
-
-		ALOGD("framenumber:%d, captureIntent:%d",
-			  request->frame_number, captureIntent);
-	}
-
-	if (mPreviewManager != NULL) {
-		ret = mPreviewManager->registerRequest(request);
+	if (mStreamManager != NULL) {
+		ret = mStreamManager->registerRequests(request);
 		if (ret) {
 			ALOGE("Failed to registerRequest for preview");
 			return ret;
 		}
 	}
-
 	return ret;
 }
 
@@ -556,40 +540,35 @@ int Camera3HWInterface::flush()
 int Camera3HWInterface::cameraDeviceClose()
 {
 	ALOGD("[%s]", __func__);
-
-	if ((mPreviewManager != NULL) && (mPreviewManager->isRunning()))
-		mPreviewManager->stopStreaming();
-
+	if ((mStreamManager != NULL) && (mStreamManager->isRunning()))
+		mStreamManager->stopStream();
 	if (mAllocator)
 		mAllocator->common.close((struct hw_device_t *)mAllocator);
 
-	if (mScalerHandle >= 0)
-		nx_scaler_close(mScalerHandle);
 
-	ALOGD("mPreviewHandle = %d", mPreviewHandle);
-	if (mPreviewHandle >= 0) {
-		ALOGD("close preview handle");
-		close(mPreviewHandle);
-		mPreviewHandle = -1;
+	for (int i = 0; i < MAX_VIDEO_HANDLES; i++) {
+		if (mHandles[i] > 0)
+			close(mHandles[i]);
+		mHandles[i] = -1;
 	}
 
 	return 0;
 }
 
 /**
- * Common Camera Hal Interface
- */
+* Common Camera Hal Interface
+*/
 static int getNumberOfCameras(void)
 {
 	/*
-	 * only count built in camera BACK + FRONT
-	 * external camera will be notified
-	 * by camera_device_status_change callback
-	 */
+	* only count built in camera BACK + FRONT
+	* external camera will be notified
+	* by camera_device_status_change callback
+	*/
 	/*
-	 * TODO: need to implement a case when we support cameras more than 1
-	 * Currently only support one camera
-	 */
+	* TODO: need to implement a case when we support cameras more than 1
+	* Currently only support one camera
+	*/
 	ALOGI("[%s] num of cameras:%d", __func__, NUM_OF_CAMERAS);
 	return NUM_OF_CAMERAS;
 }
@@ -610,7 +589,7 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 		fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
 	if (fd < 0) {
 		ALOGE("Failed to open %s camera :%d",
-			(camera_id) ? "Front"  : "Back", fd);
+				(camera_id) ? "Front"  : "Back", fd);
 		return -ENODEV;
 	}
 
@@ -619,7 +598,7 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 
 	/* The values is not available in the other case */
 	/* TODO: set orientation by camera sensor
-	 */
+	*/
 	if (info->facing != CAMERA_FACING_EXTERNAL)
 		info->orientation = 0;
 	info->device_version = CAMERA_DEVICE_API_VERSION_3_4;
@@ -636,7 +615,7 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 	ALOGI("device version = %d\n", info->device_version);
 	ALOGI("resource cost = %d\n", info->resource_cost);
 	ALOGI("conflicting devices is %s\n", info->conflicting_devices ? "exist"
-	      : "not exist");
+			: "not exist");
 
 	close(fd);
 
@@ -649,8 +628,8 @@ static int setCallBacks(const camera_module_callbacks_t *)
 }
 
 static int cameraOpen(const struct hw_module_t *,
-							const char *id,
-							struct hw_device_t **device)
+		const char *id,
+		struct hw_device_t **device)
 {
 	int camera_id = 0;
 
@@ -683,27 +662,27 @@ static struct hw_module_methods_t camera_module_methods = {
 };
 
 extern "C" {
-camera_module_t HAL_MODULE_INFO_SYM = {
-	.common = {
-		.tag = HARDWARE_MODULE_TAG,
-		.module_api_version = CAMERA_MODULE_API_VERSION_2_4,
-		.hal_api_version = HARDWARE_HAL_API_VERSION,
-		.id = CAMERA_HARDWARE_MODULE_ID,
-		.name = "Camera HAL3",
-		.author = "Nexell",
-		.methods = &camera_module_methods,
-		.dso = NULL,
-		.reserved = {0,},
-	},
-	.get_number_of_cameras = getNumberOfCameras,
-	.get_camera_info = getCameraInfo,
-	.set_callbacks = setCallBacks,
-	.get_vendor_tag_ops = NULL,
-	.open_legacy = NULL,
-	.set_torch_mode = NULL,
-	.init = NULL,
-	.reserved = {0,}
-};
+	camera_module_t HAL_MODULE_INFO_SYM = {
+		.common = {
+			.tag = HARDWARE_MODULE_TAG,
+			.module_api_version = CAMERA_MODULE_API_VERSION_2_4,
+			.hal_api_version = HARDWARE_HAL_API_VERSION,
+			.id = CAMERA_HARDWARE_MODULE_ID,
+			.name = "Camera HAL3",
+			.author = "Nexell",
+			.methods = &camera_module_methods,
+			.dso = NULL,
+			.reserved = {0,},
+		},
+		.get_number_of_cameras = getNumberOfCameras,
+		.get_camera_info = getCameraInfo,
+		.set_callbacks = setCallBacks,
+		.get_vendor_tag_ops = NULL,
+		.open_legacy = NULL,
+		.set_torch_mode = NULL,
+		.init = NULL,
+		.reserved = {0,}
+	};
 } /* extern C */
 
-} // namespace android
+} /* namespace android */

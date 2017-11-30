@@ -13,7 +13,7 @@
 namespace android {
 
 int v4l2_set_format(int fd, uint32_t f, uint32_t w, uint32_t h,
-		    uint32_t num_planes, uint32_t strides[], uint32_t sizes[])
+		uint32_t num_planes, uint32_t strides[], uint32_t sizes[])
 {
 	struct v4l2_format v4l2_fmt;
 
@@ -52,7 +52,7 @@ int v4l2_req_buf(int fd, int count)
 }
 
 int v4l2_qbuf(int fd, uint32_t index, int dma_fds[], uint32_t num_planes,
-			  uint32_t sizes[])
+		uint32_t sizes[])
 {
 	struct v4l2_buffer buf;
 	struct v4l2_plane planes[num_planes];
@@ -128,7 +128,7 @@ int v4l2_get_framesize(int fd, struct v4l2_frame_interval *f)
 		f->width = frame.stepwise.max_width;
 		f->height = frame.stepwise.max_height;
 		ALOGD("[%s] index:%d, width:%d, height:%d", __func__,
-		      f->index, f->width, f->height);
+			f->index, f->width, f->height);
 	} else
 		ALOGE("[%s] failed to get frame size ret:%d", __func__, ret);
 	return ret;
@@ -147,7 +147,7 @@ int v4l2_get_frameinterval(int fd, struct v4l2_frame_interval *f, int minOrMax)
 	if (!ret) {
 		f->interval[frame.index] = frame.discrete.denominator;
 		ALOGD("index:%d, width:%d, height:%d, interval:%d",
-			f->index, f->width, f->height, f->interval[frame.index]);
+				f->index, f->width, f->height, f->interval[frame.index]);
 	} else
 		ALOGE("failed to get frame interval information :%d", ret);
 	return ret;

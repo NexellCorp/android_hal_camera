@@ -21,11 +21,23 @@
 #define NUM_OF_CAMERAS			1
 #endif
 
-enum {
-	PREVIEW_STREAM = 0,
-	RECORD_STREAM,
-	CAPTURE_STREAM,
-	MAX_STREAM
-};
+#ifdef CAMERA_INTERLACED
+#define MAX_VIDEO_HANDLES		1
+#else
+#define MAX_VIDEO_HANDLES		2
+#endif
+
+#ifdef BOARD_NUM_OF_SKIP_FRAMES
+#define NUM_OF_SKIP_FRAMES		BOARD_NUM_OF_SKIP_FRAMES
+#else
+#define NUM_OF_SKIP_FRAMES		0
+#endif
+
+/*#define TRACE_STREAM*/
+#ifdef TRACE_STREAM
+#define dbg_stream(a...)		ALOGD(a)
+#else
+#define dbg_stream(a...)
+#endif
 
 #endif

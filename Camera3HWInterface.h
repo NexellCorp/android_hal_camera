@@ -16,9 +16,6 @@
 #ifndef CAMERA3_HW_INTERFACE_H
 #define CAMERA3_HW_INTERFACE_H
 
-#include "GlobalDef.h"
-#include "StreamManager.h"
-
 namespace android {
 
 /*****************************************************************************/
@@ -38,27 +35,26 @@ public:
 
 	int cameraDeviceClose();
 	int validateCaptureRequest(camera3_capture_request_t *request,
-				   bool firstRequest);
+		bool firstRequest);
 	int sendResult();
 
 	camera3_device_t *getCameraDevice() {
-		return &mCameraDevice;
+	return &mCameraDevice;
 	}
 
 private:
 	int mCameraId;
 	const camera3_callback_ops_t *mCallbacks;
-	int mPreviewHandle;
-	int mScalerHandle;
+	int mHandles[MAX_VIDEO_HANDLES];
 	alloc_device_t *mAllocator;
 	const camera_metadata_t *mRequestMetadata[CAMERA3_TEMPLATE_MANUAL] =
-		{NULL, NULL, NULL, NULL, NULL};
+	{NULL, NULL, NULL, NULL, NULL};
+	sp<StreamManager> mStreamManager;
 
 private:
 	camera3_device_t mCameraDevice;
-	sp<StreamManager> mPreviewManager;
 };
 
-} // namespace android
+} /* namespace android */
 
 #endif /* CAMERA3_HW_INTERFACE_H */
