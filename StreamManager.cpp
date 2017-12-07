@@ -608,10 +608,10 @@ void StreamManager::setCaptureResult(uint32_t type, NXCamera3Buffer *buf)
 	dbg_stream("[%s] get result from %d frame, type:%d", __func__,
 			buf->getFrameNumber(), type);
 
-	if ((type < NX_PREVIEW_STREAM) || (type > NX_RECORD_STREAM))
+	if (type > NX_RECORD_STREAM)
 		ALOGE("Invalied type");
 	else {
-		mResultQ[type-1].queue(buf);
+		mResultQ[type].queue(buf);
 		if (!isRunning()) {
 			dbg_stream("START StreamManager Thread");
 			run("StreamManagerThread");
@@ -635,7 +635,7 @@ int StreamManager::configureStreams(camera3_stream_configuration_t *stream_list)
 		camera3_stream_t *stream = stream_list->streams[i];
 		dbg_stream("[%zu] format:0x%x, width:%d, height:%d, usage:0x%x",
 				i, stream->format, stream->width, stream->height, stream->usage);
-		mStream[i] = new Stream(mFd[0], mAllocator, &mResultCb, stream, NX_IDLE_STREAM);
+		mStream[i] = new Stream(mFd[0], mAllocator, &mResultCb, stream, NX_MAX_STREAM);
 		if (mStream[i] == NULL) {
 			ALOGE("Failed to create stream:%d", i);
 			return -EINVAL;
@@ -651,24 +651,25 @@ sp<Stream> StreamManager::getStream(uint32_t type, camera3_stream_t *ph)
 	sp<Stream> stream = NULL;
 	int j;
 
-	if (!ph) {
-		dbg_stream("[%s] type:%d", __func__, type);
-		for (j = 0; j < NX_RECORD_STREAM; j++)
-		{
-			if ((mStream[j] != NULL) && (mStream[j]->getMode() == type)) {
-				stream = mStream[j];
-				break;
-			}
-		}
-	} else {
-		for (j = 0; j < NX_RECORD_STREAM; j++) {
+	if (ph) {
+		for (j = 0; j < NX_MAX_STREAM; j++) {
 			if ((mStream[j] != NULL) &&
 					(mStream[j]->isThisStream(ph))) {
 				stream = mStream[j];
 				break;
 			}
 		}
+	} else {
+		dbg_stream("[%s] type:%d", __func__, type);
+		for (j = 0; j < NX_MAX_STREAM; j++)
+		{
+			if ((mStream[j] != NULL) && (mStream[j]->getMode() == type)) {
+				stream = mStream[j];
+				break;
+			}
+		}
 	}
+
 	return stream;
 }
 
@@ -681,7 +682,8 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 
 	setting = r->settings;
 
-	dbg_stream("[%s] frame number:%d", __func__, r->frame_number);
+	dbg_stream("[%s] frame number:%d, num_output_buffers:%d", __func__,
+			r->frame_number, r->num_output_buffers);
 
 	if (setting.exists(ANDROID_REQUEST_ID)) {
 		if (mPipeLineDepth == MAX_BUFFER_COUNT)
@@ -690,7 +692,7 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 			mPipeLineDepth++;
 	}
 	private_handle_t *ph;
-	camera3_stream_t *s;
+	camera3_stream_t *s, *s1;
 	for (uint32_t i = 0; i < r->num_output_buffers; i++) {
 		b = &r->output_buffers[i];
 
@@ -698,9 +700,8 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 			ALOGE("buffer or status is not valid to use:%d", b->status);
 			return -EINVAL;
 		}
+		//if (s->usage & (GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_HW_CAMERA_WRITE))
 		s = b->stream;
-		dbg_stream("[stream] format:0x%x, width:%d, height:%d, usage:0x%x",
-				s->format, s->width, s->height, s->usage);
 		ph = (private_handle_t *)*b->buffer;
 		if (ph->share_fd < 0) {
 			ALOGE("Invalid Buffer --> no fd");
@@ -708,7 +709,7 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 		}
 		dbg_stream("format:0x%x, width:%d, height:%d, size:%d",
 				ph->format, ph->width, ph->height, ph->size);
-		stream = getStream(NX_IDLE_STREAM, s);
+		stream = getStream(NX_MAX_STREAM, s);
 		if (stream == NULL) {
 			ALOGE("Failed to get stream for this buffer");
 			return -EINVAL;
@@ -739,7 +740,7 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 						stream->run("Preview Stream Thread");
 					}
 				} else {
-					stream = getStream(NX_IDLE_STREAM, s);
+					stream = getStream(NX_MAX_STREAM, s);
 					if (stream == NULL) {
 						ALOGE("Failed to get stream for this buffer");
 						return -EINVAL;
@@ -758,7 +759,7 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 						stream->run("Capture Stream Thread");
 					}
 				} else {
-					stream = getStream(NX_IDLE_STREAM, 0);
+					stream = getStream(NX_MAX_STREAM, 0);
 					if (stream == NULL) {
 						ALOGE("Failed to get stream for this buffer");
 						return -EINVAL;
@@ -773,14 +774,16 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 					stream->stopStreaming();
 				stream = getStream(NX_PREVIEW_STREAM, 0);
 				if (stream != NULL) {
-					if (!stream->isRunning())
+					if (!stream->isRunning()) {
 						stream->run("Preview Stream Thread");
-					} else {
-						stream = getStream(NX_IDLE_STREAM, s);
-						if (stream == NULL) {
-							ALOGE("Failed to get stream for this buffer");
-							return -EINVAL;
-						}
+					}
+				} else {
+					ALOGD("usage = 0x%x", s->usage);
+					stream = getStream(NX_MAX_STREAM, 0);
+					if (stream == NULL) {
+						ALOGE("Failed to get stream for this buffer");
+						return -EINVAL;
+					}
 					stream->setMode(NX_PREVIEW_STREAM);
 					stream->setHandle(mFd[0]);
 					dbg_stream("[%s] setHandle Fd(0):%d for Preview",
@@ -793,18 +796,35 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 					if (stream != NULL) {
 						if (!stream->isRunning())
 							stream->run("Record Stream Thread");
-						} else {
-							stream = getStream(NX_IDLE_STREAM, 0);
-							if (stream == NULL) {
-								ALOGE("Failed to get stream for this buffer");
-								return -EINVAL;
-							}
-							stream->setMode(NX_RECORD_STREAM);
-							dbg_stream("[%s] setHandle Fd(%d):%d for Record",
-							__func__, MAX_VIDEO_HANDLES -1, mFd[MAX_VIDEO_HANDLES-1]);
-							stream->setHandle(mFd[MAX_VIDEO_HANDLES-1]);
-							stream->run("Record Stream Thread");
+					} else {
+						stream = getStream(NX_MAX_STREAM, s);
+						if (stream == NULL) {
+							ALOGE("Failed to get stream for this buffer");
+							return -EINVAL;
 						}
+						stream->setMode(NX_RECORD_STREAM);
+						dbg_stream("[%s] setHandle Fd(%d):%d for Record",
+						__func__, MAX_VIDEO_HANDLES -1, mFd[MAX_VIDEO_HANDLES-1]);
+						stream->setHandle(mFd[MAX_VIDEO_HANDLES-1]);
+						stream->run("Record Stream Thread");
+					}
+				}
+			}
+			else if (intent ==
+					ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT) {
+				stream = getStream(NX_SNAPSHOT_STREAM, 0);
+				if (stream != NULL) {
+					if (!stream->isRunning()) {
+						stream->run("Capture Stream Thread");
+					}
+				} else {
+					stream = getStream(NX_MAX_STREAM, 0);
+					if (stream == NULL) {
+						ALOGE("Failed to get stream for this buffer");
+						return -EINVAL;
+					}
+					stream->setMode(NX_SNAPSHOT_STREAM);
+					stream->run("Snapshot Stream Thread");
 				}
 			}
 			mMode = intent;
@@ -827,9 +847,9 @@ int StreamManager::stopStream()
 {
 	int ret = NO_ERROR, i;
 
-	for (i = 0; i <NX_RECORD_STREAM; i++) {
+	for (i = 0; i <NX_MAX_STREAM; i++) {
 		if ((mStream[i] != NULL) && (mStream[i]->isRunning()))
-		mStream[i]->stopStreaming();
+			mStream[i]->stopStreaming();
 	}
 
 	while (!mRequestQ.isEmpty()) {
@@ -869,7 +889,7 @@ int StreamManager::sendResult(bool drain)
 	mCb->notify(mCb, &msg);
 
 	/* send result */
-	private_handle_t *preview, *record, *capture;
+	private_handle_t *preview = NULL, *record = NULL, *capture = NULL, *snapshot;
 	camera3_capture_result_t result;
 	exif_attribute_t *exif = NULL;
 	bzero(&result, sizeof(camera3_capture_result_t));
@@ -878,39 +898,62 @@ int StreamManager::sendResult(bool drain)
 	result.result = translateMetadata(request->meta, exif, timestamp,
 			mPipeLineDepth);
 	camera3_stream_buffer_t output_buffers[result.num_output_buffers];
+	int j = 0;
 	for (uint32_t i = 0; i < result.num_output_buffers; i++) {
 		sp<Stream> stream = NULL;
 		NXCamera3Buffer *buf = mRQ.dequeue();
 		if (buf) {
 			output_buffers[i].stream = buf->getStream();
 			output_buffers[i].buffer = buf->getBuffer();
-		} else
-			ALOGE("Failed to get buffer form RQ");
 			output_buffers[i].release_fence = -1;
 			output_buffers[i].acquire_fence = -1;
 			output_buffers[i].status = 0;
+		} else {
+			ALOGE("Failed to get buffer form RQ");
+			break;
 		}
-#if 0
-		stream = getStream(NX_PREVIEW_STREAM, 0);
-		if (stream != NULL)
-			preview = (private_handle_t *)*buf->getBuffer();
-		stream = getStream(NX_CAPTURE_STREAM, 0);
-		if (stream != NULL)
-			capture = (private_handle_t *)*buf->getBuffer();
-		stream = getStream(NX_RECORD_STREAM, 0);
-		if (stream != NULL)
-			record = (private_handle_t *)*buf->getBuffer();
-		if ((record != NULL) && (MAX_VIDEO_HANDLES == 1))
-			copyBuffer(record, preview);
-		if (capture != NULL) {
-			if (result.num_output_buffers > 2) {
-				if (capture->format == HAL_PIXEL_FORMAT_BLOB) {
-					jpegEncoding(capture, preview, exif);
-				} else
-					copyBuffer(capture, preview);
+		stream = getStream(NX_MAX_STREAM, buf->getStream());
+		if (stream != NULL) {
+			if (stream->getMode() == NX_PREVIEW_STREAM) {
+				dbg_stream("preview");
+				preview =
+					(private_handle_t *)buf->getPrivateHandle();
+			} else if (stream->getMode() == NX_CAPTURE_STREAM){
+				dbg_stream("capture");
+				capture =
+					(private_handle_t *)buf->getPrivateHandle();
+			} else if (stream->getMode() == NX_RECORD_STREAM) {
+				dbg_stream("record");
+				record =
+					(private_handle_t *)buf->getPrivateHandle();
+			} else if (stream->getMode() == NX_SNAPSHOT_STREAM) {
+				dbg_stream("snapshot");
+				snapshot =
+					(private_handle_t *)buf->getPrivateHandle();
 			}
+		} else
+			dbg_stream("setream is null\n");
+	}
+	if (preview != NULL) {
+		if ((record != NULL) && (MAX_VIDEO_HANDLES == 1)) {
+			dbg_stream("copy for record");
+			copyBuffer(record, preview);
 		}
-#endif
+		if (capture != NULL) {
+			dbg_stream("copy for capture");
+			if (capture->format == HAL_PIXEL_FORMAT_BLOB)
+				jpegEncoding(capture, preview, exif);
+			else
+				copyBuffer(capture, preview);
+		}
+		if (snapshot != NULL) {
+			dbg_stream("copy for snapshot");
+			if (capture->format == HAL_PIXEL_FORMAT_BLOB)
+				jpegEncoding(snapshot, preview, exif);
+			else
+				copyBuffer(snapshot, preview);
+		}
+	}
 	result.output_buffers = output_buffers;
 	result.partial_result = 1;
 	result.input_buffer = NULL;
@@ -918,7 +961,8 @@ int StreamManager::sendResult(bool drain)
 			result.frame_number, result.num_output_buffers);
 
 	mCb->process_capture_result(mCb, &result);
-	free(request);
+	if (request)
+		free(request);
 	dbg_stream("[%s] Exit", __func__);
 
 	return 0;
@@ -958,18 +1002,20 @@ bool StreamManager::threadLoop()
 	uint32_t num_buffers = request->num_output_buffers;
 	if (mNumBuffers)
 		num_buffers = mNumBuffers;
-	for (int i = 0; i < NX_RECORD_STREAM; i++) {
+	for (int i = 0; i < NX_MAX_STREAM; i++) {
 		int size = mResultQ[i].size();
 		if (size > 0) {
 			NXCamera3Buffer *buf =
 			mResultQ[i].getHead();
 			if ((buf) && (buf->getFrameNumber() == frame_number)) {
-				dbg_stream("got a buffer for the frame_buffer:%d", i);
+				dbg_stream("got a buffer for the frame_buffer:%d from %d",
+						frame_number, i);
 				buf = mResultQ[i].dequeue();
 				mRQ.queue(buf);
 				num_buffers--;
+				dbg_stream("left buffers:%d", num_buffers);
 				if (num_buffers == 0) {
-					dbg_stream("got all:%d buffers", num_buffers);
+					dbg_stream("got all:%d buffers", request->num_output_buffers);
 					sendResult(false);
 					mNumBuffers = num_buffers;
 					break;

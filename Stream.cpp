@@ -303,7 +303,8 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf)
 {
 	int ret = NO_ERROR;
 
-	dbg_stream("[%s:%d] Enter", __func__, mType);
+	dbg_stream("[%s:%d] Enter frame_number:%d", __func__, mType,
+			fNum);
 	NXCamera3Buffer *buffer = mFQ.dequeue();
 	if (!buffer) {
 		ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
@@ -312,8 +313,7 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf)
 	buffer->init(fNum, buf->stream, buf->buffer);
 	private_handle_t *b = buffer->getPrivateHandle();
 	dbg_stream("[%s:%d] format:0x%x, width:%d, height:%d size:%d",
-			__func__, mType, b->format, b->width,
-	b->height, b->size);
+			__func__, mType, b->format, b->width, b->height, b->size);
 	mQ.queue(buffer);
 	return ret;
 }
@@ -327,22 +327,10 @@ status_t Stream::readyToRun()
 	if (mSkip)
 		return ret;
 
-	if ((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) {
-		bufferCount = mQ.size();
-		for (i = 0; i < bufferCount; i++) {
-			buf = mQ.dequeue();
-			dbg_stream("[%d] mQ.dequeue: %p", mType, buf);
-			if (!buf)
-			mRQ.queue(buf);
-			dbg_stream("[%d] mRQ.queue: %p", mType, buf);
-		}
-		setQIndex(bufferCount);
-		return ret;
-	}
-
 	dbg_stream("[%s:%d]", __func__, mType);
 
-	if (mQ.size() <= 0) {
+	bufferCount = mQ.size();
+	if (bufferCount <= 0) {
 		dbg_stream("[%s:%d] mQ.size is invalid", __func__, mType);
 		return -EINVAL;
 	}
@@ -352,6 +340,21 @@ status_t Stream::readyToRun()
 		ALOGE("failed to get buf from queue");
 		return -EINVAL;
 	}
+
+	if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
+			(mType == NX_SNAPSHOT_STREAM)) {
+		for (i = 0; i < bufferCount; i++) {
+			buf = mQ.dequeue();
+			if (buf) {
+				dbg_stream("[%d] mQ.dequeue: %p", mType, buf);
+				mRQ.queue(buf);
+				dbg_stream("[%d] mRQ.queue: %p", mType, buf);
+			}
+		}
+		setQIndex(bufferCount);
+		return ret;
+	}
+
 	private_handle_t *ph = buf->getPrivateHandle();
 	ret = setBufferFormat(ph);
 	if (ret) {
@@ -364,7 +367,6 @@ status_t Stream::readyToRun()
 		goto drain;
 	}
 
-	bufferCount = mQ.size();
 	for (i = 0; i < bufferCount; i++) {
 		buf = mQ.dequeue();
 		dbg_stream("[%d] mQ.dequeue: %p", mType, buf);
@@ -409,16 +411,21 @@ bool Stream::threadLoop()
 	int ret = NO_ERROR;
 
 	dbg_stream("[%d] mQ:%zu, mRQ:%zu", mType, mQ.size(), mRQ.size());
+
 	if (mRQ.size() > 0) {
-		if ((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1))
-			goto skipDequeue;
+		if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
+				(mType == NX_SNAPSHOT_STREAM)) {
+			usleep(30000);
+			dbg_stream("[%d] skip v4l2 dequeue", mType);
+			goto send;
+		}
 		ret = v4l2_dqbuf(mFd, &dqIndex, &fd, 1);
 		if (ret) {
 			ALOGE("Failed to dqbuf for preview:%d", ret);
 			goto stop;
 		}
 		dbg_stream("[%d] dqIndex %d", mType, dqIndex);
-skipDequeue:
+send:
 		ret = sendResult();
 		if (ret) {
 			ALOGE("Failed to send result:%d", ret);
@@ -431,8 +438,12 @@ skipDequeue:
 		for (i = 0; i < qSize; i++) {
 			NXCamera3Buffer *buf = mQ.dequeue();
 			dbg_stream("[%d] mQ.dequeue:%p, mQIndex:%d", mType, buf, mQIndex);
-			if ((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1))
-				goto skipDequeue;
+			if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
+					(mType == NX_SNAPSHOT_STREAM)) {
+				dbg_stream("[%d] skip v4l2 queue", mType);
+				usleep(30000);
+				goto queue;
+			}
 			dma_fd = buf->getDmaFd();
 			ret = v4l2_qbuf(mFd, mQIndex, &dma_fd, 1, &mSize);
 			if (ret) {
@@ -441,10 +452,10 @@ skipDequeue:
 				goto stop;
 			}
 			dbg_stream("[%d] qbuf index:%d", mType, mQIndex);
-skipQueue:
+queue:
 			mRQ.queue(buf);
 			setQIndex(mQIndex+1);
-			}
+		}
 	} else {
 		dbg_stream("[%d] underflow of input", mType);
 		dbg_stream("[%d] InputSize:%zu, QueuedSize:%zu", mType, mQ.size(), mRQ.size());
@@ -459,7 +470,8 @@ skipQueue:
 stop:
 	dbg_stream("[%d] Stream Thread is stopped", mType);
 	drainBuffer();
-	if ((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1))
+	if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
+			(mType == NX_SNAPSHOT_STREAM))
 		return false;
 	stopV4l2();
 	return false;

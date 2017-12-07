@@ -159,7 +159,6 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		mHandles[1] = fd;
 		ALOGD("mHandle[1] = %d", fd);
 	}
-
 	mCallbacks = callback;
 	for (int j = 0; j < CAMERA3_TEMPLATE_MANUAL; j++) {
 		mRequestMetadata[j] = NULL;
@@ -208,11 +207,12 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 					i, new_stream->format, new_stream->width, new_stream->height,
 					new_stream->max_buffers,
 					new_stream->usage);
-			new_stream->max_buffers = MAX_BUFFER_COUNT;
-			if ((new_stream->format ==
-						HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) ||
-					(new_stream->format == HAL_PIXEL_FORMAT_YCbCr_420_888))
+			if (new_stream->format == HAL_PIXEL_FORMAT_BLOB)
+				new_stream->max_buffers = 1;
+			else {
 				new_stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
+				new_stream->max_buffers = MAX_BUFFER_COUNT;
+			}
 		}
 		ALOGD("[%s] stream type = %d, max_buffer = %d, usage = 0x%x",
 				__func__, new_stream->stream_type, new_stream->max_buffers,

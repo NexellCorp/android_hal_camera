@@ -29,10 +29,10 @@
 #include "NXQueue.h"
 
 typedef enum {
-	NX_IDLE_STREAM = 0,
-	NX_PREVIEW_STREAM,
+	NX_PREVIEW_STREAM = 0,
 	NX_CAPTURE_STREAM,
 	NX_RECORD_STREAM,
+	NX_SNAPSHOT_STREAM,
 	NX_MAX_STREAM,
 } nx_stream_type;
 
@@ -68,7 +68,7 @@ public:
 	uint32_t getFrameNumber() {
 		return mFrameNumber;
 	}
-	private:
+private:
 	uint32_t mFrameNumber;
 	camera3_stream_t *mStream;
 	buffer_handle_t mBuffer;
