@@ -12,6 +12,9 @@
 #include "GlobalDef.h"
 #include "StreamManager.h"
 
+#define PREVIEW_USAGE	GRALLOC_USAGE_HW_TEXTURE
+#define RECORD_USAGE	GRALLOC_USAGE_HW_VIDEO_ENCODER
+
 namespace android {
 
 camera_metadata_t*
@@ -455,6 +458,10 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, ex
 	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
 	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
 
+	if (exif == NULL) {
+		ALOGE("[%s] Exif is NULL", __func__);
+		return -EINVAL;
+	}
 	dbg_stream("start jpegEncoding");
 
 	ret = module->lock(module, dst, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
@@ -476,7 +483,7 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, ex
 
 	/* make exif */
 	ExifProcessor::ExifResult result =
-	mExifProcessor.makeExif(mAllocator, src->width, src->height, src, exif, dst);
+		mExifProcessor.makeExif(mAllocator, src->width, src->height, src, exif, dst);
 	mExifProcessor.clear();
 	int exifSize = result.getSize();
 	if (!exifSize) {
@@ -518,7 +525,7 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, ex
 					sizeof(camera3_jpeg_blob_t)]);
 	jpegBlob->jpeg_size = jpegSize + exifSize;
 	jpegBlob->jpeg_blob_id = CAMERA3_JPEG_BLOB_ID;
-	ALOGD("capture success: jpegSize(%d), totalSize(%d)",
+	dbg_stream("capture success: jpegSize(%d), totalSize(%d)",
 	jpegSize, jpegBlob->jpeg_size);
 	ret = 0;
 
@@ -608,7 +615,7 @@ void StreamManager::setCaptureResult(uint32_t type, NXCamera3Buffer *buf)
 	dbg_stream("[%s] get result from %d frame, type:%d", __func__,
 			buf->getFrameNumber(), type);
 
-	if (type > NX_RECORD_STREAM)
+	if (type > NX_SNAPSHOT_STREAM)
 		ALOGE("Invalied type");
 	else {
 		mResultQ[type].queue(buf);
@@ -646,7 +653,7 @@ int StreamManager::configureStreams(camera3_stream_configuration_t *stream_list)
 	return NO_ERROR;
 }
 
-sp<Stream> StreamManager::getStream(uint32_t type, camera3_stream_t *ph)
+sp<Stream> StreamManager::getStream(uint32_t type, camera3_stream_t *ph, int usage)
 {
 	sp<Stream> stream = NULL;
 	int j;
@@ -659,8 +666,16 @@ sp<Stream> StreamManager::getStream(uint32_t type, camera3_stream_t *ph)
 				break;
 			}
 		}
+	} else if(usage) {
+		for (j = 0; j < NX_MAX_STREAM; j++)
+		{
+			if ((mStream[j] != NULL) && (mStream[j]->getUsage() & usage)) {
+				stream = mStream[j];
+				break;
+			}
+		}
+
 	} else {
-		dbg_stream("[%s] type:%d", __func__, type);
 		for (j = 0; j < NX_MAX_STREAM; j++)
 		{
 			if ((mStream[j] != NULL) && (mStream[j]->getMode() == type)) {
@@ -691,25 +706,22 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 		else
 			mPipeLineDepth++;
 	}
-	private_handle_t *ph;
-	camera3_stream_t *s, *s1;
 	for (uint32_t i = 0; i < r->num_output_buffers; i++) {
-		b = &r->output_buffers[i];
+		const camera3_stream_buffer_t *b = &r->output_buffers[i];
 
 		if ((b == NULL) || (b->status)) {
 			ALOGE("buffer or status is not valid to use:%d", b->status);
 			return -EINVAL;
 		}
-		//if (s->usage & (GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_HW_CAMERA_WRITE))
-		s = b->stream;
-		ph = (private_handle_t *)*b->buffer;
+
+		private_handle_t *ph = (private_handle_t *)*b->buffer;
 		if (ph->share_fd < 0) {
 			ALOGE("Invalid Buffer --> no fd");
 			return -EINVAL;
 		}
 		dbg_stream("format:0x%x, width:%d, height:%d, size:%d",
 				ph->format, ph->width, ph->height, ph->size);
-		stream = getStream(NX_MAX_STREAM, s);
+		stream = getStream(NX_MAX_STREAM, b->stream, 0);
 		if (stream == NULL) {
 			ALOGE("Failed to get stream for this buffer");
 			return -EINVAL;
@@ -725,106 +737,148 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 	if (setting.exists(ANDROID_CONTROL_CAPTURE_INTENT)) {
 		uint8_t intent =
 		setting.find(ANDROID_CONTROL_CAPTURE_INTENT).data.u8[0];
-		dbg_stream("intent = %d, framenumber:%d", intent, r->frame_number);
+		dbg_stream("intent = %d, framenumber:%d, num of buffers:%d",
+				intent, r->frame_number, r->num_output_buffers);
 		if (mMode != intent) {
+			if ((intent == ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE) &&
+					(mMode == ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD)) {
+				intent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
+				dbg_stream("[%s] snapshot request is received as still capture",
+						__func__);
+			}
 			dbg_stream("receive new request for %d, previous:%d",
 					intent, mMode);
 			if ((intent == ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW) ||
 					(intent == ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG)) {
-				stream = getStream(NX_CAPTURE_STREAM, 0);
+				stream = getStream(NX_CAPTURE_STREAM, 0, 0);
 				if ((stream != NULL) && (stream->isRunning()))
 					stream->stopStreaming();
-				stream = getStream(NX_PREVIEW_STREAM, 0);
+				stream = getStream(NX_RECORD_STREAM, 0, 0);
+				if ((stream != NULL) && (stream->isRunning()))
+					stream->stopStreaming();
+				stream = getStream(NX_PREVIEW_STREAM, 0, 0);
 				if (stream != NULL) {
 					if (!stream->isRunning()) {
-						stream->run("Preview Stream Thread");
+						if (stream->prepareForRun() == NO_ERROR)
+							stream->run("Preview Stream Thread");
+						else
+							return -EINVAL;
 					}
 				} else {
-					stream = getStream(NX_MAX_STREAM, s);
+					stream = getStream(NX_MAX_STREAM, 0, PREVIEW_USAGE);
 					if (stream == NULL) {
 						ALOGE("Failed to get stream for this buffer");
 						return -EINVAL;
 					}
 					stream->setMode(NX_PREVIEW_STREAM);
-					stream->run("Preview Stream Thread");
+					if (stream->prepareForRun() == NO_ERROR)
+						stream->run("Preview Stream Thread");
+					else
+						return -EINVAL;
 				}
 			} else if (intent == ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE) {
-				stream = getStream(NX_PREVIEW_STREAM, 0);
+				stream = getStream(NX_PREVIEW_STREAM, 0, 0);
 				if ((stream != NULL) && (stream->isRunning()))
 					stream->stopStreaming();
-				stream = getStream(NX_CAPTURE_STREAM, 0);
+				stream = getStream(NX_CAPTURE_STREAM, 0, 0);
 				if (stream != NULL) {
 					if (!stream->isRunning()) {
 						stream->skipFrames();
-						stream->run("Capture Stream Thread");
+						if (stream->prepareForRun() == NO_ERROR)
+							stream->run("Capture Stream Thread");
+						else
+							return -EINVAL;
 					}
 				} else {
-					stream = getStream(NX_MAX_STREAM, 0);
+					stream = getStream(NX_MAX_STREAM, 0, 0);
 					if (stream == NULL) {
 						ALOGE("Failed to get stream for this buffer");
 						return -EINVAL;
 					}
 					stream->setMode(NX_CAPTURE_STREAM);
 					stream->skipFrames();
-					stream->run("Capture Stream Thread");
+					if (stream->prepareForRun() == NO_ERROR)
+						stream->run("Capture Stream Thread");
+					else
+						return -EINVAL;
 				}
 			} else if (intent == ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD) {
-				stream = getStream(NX_CAPTURE_STREAM, 0);
+				stream = getStream(NX_CAPTURE_STREAM, 0, 0);
 				if ((stream != NULL) && (stream->isRunning()))
 					stream->stopStreaming();
-				stream = getStream(NX_PREVIEW_STREAM, 0);
+				stream = getStream(NX_SNAPSHOT_STREAM, 0, 0);
+				if ((stream != NULL) && (stream->isRunning()))
+					stream->stopStreaming();
+				if (r->num_output_buffers == 1) {
+					stream = getStream(NX_RECORD_STREAM, 0, 0);
+					if ((stream != NULL) && (stream->isRunning()))
+						stream->stopStreaming();
+				}
+				stream = getStream(NX_PREVIEW_STREAM, 0, 0);
 				if (stream != NULL) {
 					if (!stream->isRunning()) {
-						stream->run("Preview Stream Thread");
+						stream->setHandle(mFd[0]);
+						if (stream->prepareForRun() == NO_ERROR)
+							stream->run("Preview Stream Thread");
+						else
+							return -EINVAL;
 					}
 				} else {
-					ALOGD("usage = 0x%x", s->usage);
-					stream = getStream(NX_MAX_STREAM, 0);
+					stream = getStream(NX_MAX_STREAM, 0, PREVIEW_USAGE);
 					if (stream == NULL) {
 						ALOGE("Failed to get stream for this buffer");
 						return -EINVAL;
 					}
 					stream->setMode(NX_PREVIEW_STREAM);
 					stream->setHandle(mFd[0]);
-					dbg_stream("[%s] setHandle Fd(0):%d for Preview",
-					__func__, mFd[0]);
-					stream->run("Preview Stream Thread");
+					if (stream->prepareForRun() == NO_ERROR)
+						stream->run("Preview Stream Thread");
 				}
-
 				if (r->num_output_buffers > 1) {
-					stream = getStream(NX_RECORD_STREAM, 0);
+					stream = getStream(NX_RECORD_STREAM, 0, 0);
 					if (stream != NULL) {
-						if (!stream->isRunning())
-							stream->run("Record Stream Thread");
+						if (!stream->isRunning()) {
+							if (stream->prepareForRun() == NO_ERROR)
+								stream->run("Record Stream Thread");
+							else
+								return -EINVAL;
+						}
 					} else {
-						stream = getStream(NX_MAX_STREAM, s);
+						stream = getStream(NX_MAX_STREAM, 0, RECORD_USAGE);
 						if (stream == NULL) {
 							ALOGE("Failed to get stream for this buffer");
 							return -EINVAL;
 						}
 						stream->setMode(NX_RECORD_STREAM);
-						dbg_stream("[%s] setHandle Fd(%d):%d for Record",
-						__func__, MAX_VIDEO_HANDLES -1, mFd[MAX_VIDEO_HANDLES-1]);
 						stream->setHandle(mFd[MAX_VIDEO_HANDLES-1]);
-						stream->run("Record Stream Thread");
+						if (stream->prepareForRun() == NO_ERROR)
+							stream->run("Record Stream Thread");
+						else
+							return -EINVAL;
 					}
 				}
 			}
 			else if (intent ==
 					ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT) {
-				stream = getStream(NX_SNAPSHOT_STREAM, 0);
+				stream = getStream(NX_SNAPSHOT_STREAM, 0, 0);
 				if (stream != NULL) {
 					if (!stream->isRunning()) {
-						stream->run("Capture Stream Thread");
+						if (stream->prepareForRun() == NO_ERROR)
+							stream->run("Capture Stream Thread");
+						else
+							return -EINVAL;
 					}
 				} else {
-					stream = getStream(NX_MAX_STREAM, 0);
+					stream = getStream(NX_MAX_STREAM, 0, 0);
 					if (stream == NULL) {
 						ALOGE("Failed to get stream for this buffer");
 						return -EINVAL;
 					}
 					stream->setMode(NX_SNAPSHOT_STREAM);
-					stream->run("Snapshot Stream Thread");
+					if (stream->prepareForRun() == NO_ERROR)
+						stream->run("Snapshot Stream Thread");
+					else
+						return -EINVAL;
 				}
 			}
 			mMode = intent;
@@ -834,13 +888,15 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 	(nx_camera_request_t*)malloc(sizeof(nx_camera_request_t));
 	if (!request) {
 		ALOGE("Failed to malloc for request");
-		return -ENOMEM;
+		ret = -ENOMEM;
 	}
 	request->frame_number = r->frame_number;
 	request->num_output_buffers = r->num_output_buffers;
 	request->meta = setting.release();
 	mRequestQ.queue(request);
 	return ret;
+out:
+	return -EINVAL;
 }
 
 int StreamManager::stopStream()
@@ -889,16 +945,15 @@ int StreamManager::sendResult(bool drain)
 	mCb->notify(mCb, &msg);
 
 	/* send result */
-	private_handle_t *preview = NULL, *record = NULL, *capture = NULL, *snapshot;
+	private_handle_t *preview = NULL, *record = NULL,
+			 *capture = NULL, *snapshot = NULL;
 	camera3_capture_result_t result;
 	exif_attribute_t *exif = NULL;
 	bzero(&result, sizeof(camera3_capture_result_t));
 	result.frame_number = request->frame_number;
 	result.num_output_buffers = request->num_output_buffers;
-	result.result = translateMetadata(request->meta, exif, timestamp,
-			mPipeLineDepth);
+
 	camera3_stream_buffer_t output_buffers[result.num_output_buffers];
-	int j = 0;
 	for (uint32_t i = 0; i < result.num_output_buffers; i++) {
 		sp<Stream> stream = NULL;
 		NXCamera3Buffer *buf = mRQ.dequeue();
@@ -912,7 +967,7 @@ int StreamManager::sendResult(bool drain)
 			ALOGE("Failed to get buffer form RQ");
 			break;
 		}
-		stream = getStream(NX_MAX_STREAM, buf->getStream());
+		stream = getStream(NX_MAX_STREAM, buf->getStream(), 0);
 		if (stream != NULL) {
 			if (stream->getMode() == NX_PREVIEW_STREAM) {
 				dbg_stream("preview");
@@ -931,9 +986,19 @@ int StreamManager::sendResult(bool drain)
 				snapshot =
 					(private_handle_t *)buf->getPrivateHandle();
 			}
+			if ((stream->getFormat() == HAL_PIXEL_FORMAT_BLOB) &&
+					(exif == NULL)) {
+					exif = new exif_attribute_t();
+					if (!exif)
+						ALOGE("[%s] Failed to make exif", __func__);
+			}
 		} else
 			dbg_stream("setream is null\n");
 	}
+
+	result.result = translateMetadata(request->meta, exif, timestamp,
+			mPipeLineDepth);
+
 	if (preview != NULL) {
 		if ((record != NULL) && (MAX_VIDEO_HANDLES == 1)) {
 			dbg_stream("copy for record");
@@ -943,12 +1008,12 @@ int StreamManager::sendResult(bool drain)
 			dbg_stream("copy for capture");
 			if (capture->format == HAL_PIXEL_FORMAT_BLOB)
 				jpegEncoding(capture, preview, exif);
-			else
+			else if (MAX_VIDEO_HANDLES == 1)
 				copyBuffer(capture, preview);
 		}
 		if (snapshot != NULL) {
 			dbg_stream("copy for snapshot");
-			if (capture->format == HAL_PIXEL_FORMAT_BLOB)
+			if (snapshot->format == HAL_PIXEL_FORMAT_BLOB)
 				jpegEncoding(snapshot, preview, exif);
 			else
 				copyBuffer(snapshot, preview);

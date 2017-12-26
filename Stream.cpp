@@ -97,7 +97,7 @@ int Stream::skipFrames(void)
 		dma_fd = p->share_fd;
 		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
 		if (ret) {
-			ALOGE("[%d] Failed to v4l2_qbuf for preview(index:%zu), ret:%d",
+			ALOGE("[%d] Failed to v4l2_qbuf (index:%zu), ret:%d",
 					mType, i, ret);
 			goto fail;
 		}
@@ -174,9 +174,9 @@ drain:
 bool Stream::isThisStream(camera3_stream_t *b)
 {
 	dbg_stream("[%s:%d] Stream format:0x%x, width:%d, height:%d, usage:0x%x",
-			__func__, mType, mFormat, mWidth, mHeight, mUsage);
-	if ((b->format == (int)mFormat) && (b->width == (int)mWidth) &&
-			(b->height == (int)mHeight) && (b->usage == mUsage))
+			__func__, mType, mStream->format, mStream->width, mStream->height, mStream->usage);
+	if ((b->format == (int)mStream->format) && (b->width == (int)mStream->width) &&
+			(b->height == (int)mStream->height) && (b->usage == mStream->usage))
 		return true;
 	return false;
 }
@@ -242,6 +242,10 @@ void Stream::stopStreaming()
 		dbg_stream("[%s:%d] requestExitAndWait Exit", __func__, mType);
 	}
 
+	if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
+			(mType == NX_SNAPSHOT_STREAM) ||
+			(mStream->format == HAL_PIXEL_FORMAT_BLOB))
+		return;
 	stopV4l2();
 
 	dbg_stream("[%s:%d] Exit", __func__, mType);
@@ -318,7 +322,8 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf)
 	return ret;
 }
 
-status_t Stream::readyToRun()
+status_t Stream::prepareForRun()
+/*status_t Stream::readyToRun()*/
 {
 	NXCamera3Buffer *buf;
 	size_t bufferCount, i;
@@ -342,7 +347,8 @@ status_t Stream::readyToRun()
 	}
 
 	if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
-			(mType == NX_SNAPSHOT_STREAM)) {
+			(mType == NX_SNAPSHOT_STREAM) ||
+			(mStream->format == HAL_PIXEL_FORMAT_BLOB)) {
 		for (i = 0; i < bufferCount; i++) {
 			buf = mQ.dequeue();
 			if (buf) {
@@ -414,14 +420,15 @@ bool Stream::threadLoop()
 
 	if (mRQ.size() > 0) {
 		if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
-				(mType == NX_SNAPSHOT_STREAM)) {
+				(mType == NX_SNAPSHOT_STREAM) ||
+				(mStream->format == HAL_PIXEL_FORMAT_BLOB)) {
 			usleep(30000);
 			dbg_stream("[%d] skip v4l2 dequeue", mType);
 			goto send;
 		}
 		ret = v4l2_dqbuf(mFd, &dqIndex, &fd, 1);
 		if (ret) {
-			ALOGE("Failed to dqbuf for preview:%d", ret);
+			ALOGE("Failed to dqbuf:%d", ret);
 			goto stop;
 		}
 		dbg_stream("[%d] dqIndex %d", mType, dqIndex);
@@ -431,6 +438,9 @@ send:
 			ALOGE("Failed to send result:%d", ret);
 			goto stop;
 		}
+		if ((mType == NX_SNAPSHOT_STREAM) ||
+				(mType == NX_CAPTURE_STREAM))
+			goto stop;
 	}
 
 	qSize = mQ.size();
@@ -439,7 +449,8 @@ send:
 			NXCamera3Buffer *buf = mQ.dequeue();
 			dbg_stream("[%d] mQ.dequeue:%p, mQIndex:%d", mType, buf, mQIndex);
 			if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
-					(mType == NX_SNAPSHOT_STREAM)) {
+					(mType == NX_SNAPSHOT_STREAM) ||
+					(mStream->format == HAL_PIXEL_FORMAT_BLOB)) {
 				dbg_stream("[%d] skip v4l2 queue", mType);
 				usleep(30000);
 				goto queue;
@@ -471,7 +482,8 @@ stop:
 	dbg_stream("[%d] Stream Thread is stopped", mType);
 	drainBuffer();
 	if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
-			(mType == NX_SNAPSHOT_STREAM))
+			(mType == NX_SNAPSHOT_STREAM) ||
+			(mStream->format == HAL_PIXEL_FORMAT_BLOB))
 		return false;
 	stopV4l2();
 	return false;

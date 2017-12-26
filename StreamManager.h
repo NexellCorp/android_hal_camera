@@ -55,7 +55,7 @@ public:
 	int configureStreams(camera3_stream_configuration_t *stream_list);
 	int registerRequests(camera3_capture_request_t *r);
 	int stopStream();
-	sp<Stream> getStream(uint32_t type, camera3_stream_t *ph);
+	sp<Stream> getStream(uint32_t type, camera3_stream_t *ph, int usage);
 
 protected:
 	virtual status_t readyToRun();

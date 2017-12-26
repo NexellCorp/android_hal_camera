@@ -91,10 +91,7 @@ public:
 		: mFd(fd),
 		mAllocator(allocator),
 		mCb(cb),
-		mFormat(stream->format),
-		mWidth(stream->width),
-		mHeight(stream->height),
-		mUsage(stream->usage),
+		mStream(stream),
 		mType(type),
 		mSize(0),
 		mQIndex(0),
@@ -115,6 +112,12 @@ public:
 	uint32_t getMode(void) {
 		return mType;
 	}
+	uint32_t getUsage(void) {
+		return mStream->usage;
+	}
+	uint32_t getFormat(void) {
+		return mStream->format;
+	}
 	void setHandle(uint32_t fd) {
 		mFd = fd;
 		dbg_stream("[%s:%d] fd is %d", __func__, mType, mFd);
@@ -125,18 +128,18 @@ public:
 	int allocBuffer(uint32_t w, uint32_t h, uint32_t format,
 			buffer_handle_t *handle);
 	int skipFrames();
+	status_t prepareForRun();
 protected:
-	virtual status_t readyToRun();
+	virtual status_t readyToRun() {
+		return NO_ERROR;
+	};
 	virtual bool threadLoop();
 
 private:
 	int mFd;
 	alloc_device_t *mAllocator;
 	const nx_camera3_callback_ops_t *mCb;
-	uint32_t mFormat;
-	uint32_t mWidth;
-	uint32_t mHeight;
-	uint32_t mUsage;
+	const camera3_stream_t * mStream;
 	uint32_t mType;
 	uint32_t mSize;
 	uint32_t mQIndex;
