@@ -642,7 +642,7 @@ int StreamManager::configureStreams(camera3_stream_configuration_t *stream_list)
 		camera3_stream_t *stream = stream_list->streams[i];
 		dbg_stream("[%zu] format:0x%x, width:%d, height:%d, usage:0x%x",
 				i, stream->format, stream->width, stream->height, stream->usage);
-		mStream[i] = new Stream(mFd[0], mAllocator, &mResultCb, stream, NX_MAX_STREAM);
+		mStream[i] = new Stream(mFd[0], mScaler, mAllocator, &mResultCb, stream, NX_MAX_STREAM);
 		if (mStream[i] == NULL) {
 			ALOGE("Failed to create stream:%d", i);
 			return -EINVAL;
@@ -690,12 +690,13 @@ sp<Stream> StreamManager::getStream(uint32_t type, camera3_stream_t *ph, int usa
 
 int StreamManager::registerRequests(camera3_capture_request_t *r)
 {
-	CameraMetadata setting;
+	CameraMetadata setting, meta;
 	sp<Stream> stream;
 	const camera3_stream_buffer_t *b;
 	int ret = NO_ERROR;
 
 	setting = r->settings;
+	meta = r->settings;
 
 	dbg_stream("[%s] frame number:%d, num_output_buffers:%d", __func__,
 			r->frame_number, r->num_output_buffers);
@@ -726,7 +727,7 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 			ALOGE("Failed to get stream for this buffer");
 			return -EINVAL;
 		}
-		ret = stream->registerBuffer(r->frame_number, b);
+		ret = stream->registerBuffer(r->frame_number, b, meta.release());
 		if (ret) {
 			ALOGE("Failed to register Buffer for buffer:%d",
 					ret);

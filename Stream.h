@@ -45,12 +45,13 @@ public:
 	virtual ~NXCamera3Buffer() {
 	}
 	void init (uint32_t frameNumber, camera3_stream_t *s,
-		buffer_handle_t *b) {
+		buffer_handle_t *b, const camera_metadata_t *meta) {
 		dbg_stream("[%s] frame_number:%d, mStream:%p, mBuffer:%p",
 			__func__, frameNumber, s, b);
 		mFrameNumber = frameNumber;
 		mStream = s;
 		mBuffer = *b;
+		mMeta = meta;
 	}
 	private_handle_t *getPrivateHandle() {
 		return (private_handle_t*)(mBuffer);
@@ -68,10 +69,14 @@ public:
 	uint32_t getFrameNumber() {
 		return mFrameNumber;
 	}
+	const camera_metadata_t *getMetadata() {
+		return mMeta;
+	}
 private:
 	uint32_t mFrameNumber;
 	camera3_stream_t *mStream;
 	buffer_handle_t mBuffer;
+	const camera_metadata_t *mMeta;
 
 }; /* NXCamera3Buffer */
 
@@ -84,14 +89,16 @@ typedef struct nx_camera3_callback_ops {
 
 class Stream : public Thread {
 public:
-	Stream(int fd, alloc_device_t *allocator,
+	Stream(int fd, int scaler, alloc_device_t *allocator,
 			nx_camera3_callback_ops_t *cb,
 			camera3_stream_t * stream,
 			uint32_t type)
 		: mFd(fd),
+		mScaler(scaler),
 		mAllocator(allocator),
 		mCb(cb),
 		mStream(stream),
+		mScaleBuf(NULL),
 		mType(type),
 		mSize(0),
 		mQIndex(0),
@@ -122,11 +129,13 @@ public:
 		mFd = fd;
 		dbg_stream("[%s:%d] fd is %d", __func__, mType, mFd);
 	}
-	int registerBuffer(uint32_t frameNumber, const camera3_stream_buffer *buf);
+	int registerBuffer(uint32_t frameNumber, const camera3_stream_buffer *buf,
+			const camera_metadata_t *meta);
 	void stopStreaming();
 	bool isThisStream(camera3_stream_t *b);
 	int allocBuffer(uint32_t w, uint32_t h, uint32_t format,
 			buffer_handle_t *handle);
+	int scaling(private_handle_t *src, const camera_metadata_t *meta);
 	int skipFrames();
 	status_t prepareForRun();
 protected:
@@ -137,9 +146,11 @@ protected:
 
 private:
 	int mFd;
+	int mScaler;
 	alloc_device_t *mAllocator;
 	const nx_camera3_callback_ops_t *mCb;
 	const camera3_stream_t * mStream;
+	buffer_handle_t mScaleBuf;
 	uint32_t mType;
 	uint32_t mSize;
 	uint32_t mQIndex;

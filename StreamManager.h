@@ -30,9 +30,10 @@ typedef struct nx_camera_request {
 
 class StreamManager : public Thread {
 public:
-	StreamManager(int fd[], alloc_device_t *allocator,
+	StreamManager(int fd[], int scaler, alloc_device_t *allocator,
 			const camera3_callback_ops_t *callback)
-		: mAllocator(allocator),
+		: mScaler(scaler),
+		mAllocator(allocator),
 		mCb(callback),
 		mMode(0),
 		mNumBuffers(0),
@@ -78,6 +79,7 @@ private:
 
 private:
 	int mFd[MAX_VIDEO_HANDLES];
+	int mScaler;
 	alloc_device_t *mAllocator;
 	ExifProcessor mExifProcessor;
 	const camera3_callback_ops_t * mCb;
@@ -85,6 +87,7 @@ private:
 	NXQueue<NXCamera3Buffer *> mResultQ[NX_MAX_STREAM];
 	NXQueue<NXCamera3Buffer *> mRQ;
 	NXQueue<nx_camera_request_t *> mRequestQ;
+	buffer_handle_t mScaleBuf;
 	uint32_t mMode;
 	uint32_t mNumBuffers;
 	uint8_t mPipeLineDepth;

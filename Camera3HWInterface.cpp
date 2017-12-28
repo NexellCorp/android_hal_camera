@@ -13,6 +13,7 @@
 #include <hardware/camera3.h>
 #include <camera/CameraMetadata.h>
 
+#include <nx-scaler.h>
 #include "GlobalDef.h"
 #include "v4l2.h"
 #include "StreamManager.h"
@@ -108,6 +109,7 @@ static int cameraClose(struct hw_device_t* device);
 Camera3HWInterface::Camera3HWInterface(int cameraId)
 	: mCameraId(cameraId),
 	mCallbacks(NULL),
+	mScaler(-1),
 	mAllocator(NULL),
 	mStreamManager(NULL)
 {
@@ -165,6 +167,14 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		ALOGD("mRequestMetadata[%d] = %p\n", j, mRequestMetadata[j]);
 	}
 
+#ifdef CAMERA_USE_ZOOM
+	fd = scaler_open();
+	if (fd < 0) {
+		ALOGE("[%s] Failed to open scaler", __func__);
+		return -ENODEV;
+	}
+	mScaler = fd;
+#endif
 	if (mAllocator == NULL) {
 		hw_device_t *dev = NULL;
 		alloc_device_t *device = NULL;
@@ -229,7 +239,7 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 	if (mStreamManager == NULL) {
 		ALOGD("new Stream");
 		ALOGD("==================================================");
-		mStreamManager = new StreamManager(mHandles, mAllocator, mCallbacks);
+		mStreamManager = new StreamManager(mHandles, mScaler, mAllocator, mCallbacks);
 		if (mStreamManager == NULL) {
 			ALOGE("Failed to construct StreamManager for preview");
 			return -ENOMEM;
@@ -542,6 +552,8 @@ int Camera3HWInterface::cameraDeviceClose()
 	ALOGD("[%s]", __func__);
 	if ((mStreamManager != NULL) && (mStreamManager->isRunning()))
 		mStreamManager->stopStream();
+	if (mScaler >= 0)
+		nx_scaler_close(mScaler);
 	if (mAllocator)
 		mAllocator->common.close((struct hw_device_t *)mAllocator);
 

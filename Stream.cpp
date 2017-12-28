@@ -7,9 +7,11 @@
 #include <linux/videodev2.h>
 #include <linux/media-bus-format.h>
 #include <libnxjpeg.h>
+#include <camera/CameraMetadata.h>
 
 #include <gralloc_priv.h>
 
+#include <nx-scaler.h>
 #include "GlobalDef.h"
 #include "NXQueue.h"
 #include "v4l2.h"
@@ -47,6 +49,106 @@ int Stream::allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_handle_t
 	}
 	*p = ph;
 
+	return ret;
+}
+
+int Stream::scaling(private_handle_t *srcBuf, const camera_metadata_t *request)
+{
+	CameraMetadata meta;
+	CameraMetadata metaData;
+	uint32_t cropX;
+	uint32_t cropY;
+	uint32_t cropWidth;
+	uint32_t cropHeight;
+
+	if ((mScaler < 0) || (!mScaleBuf)) {
+		ALOGE("scaler fd or buf is invalid");
+		return -ENODEV;
+	}
+
+	meta  = request;
+
+	if (meta.exists(ANDROID_SCALER_CROP_REGION)) {
+		cropX = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[0];
+		cropY = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[1];
+		cropWidth = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[2];
+		cropHeight = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[3];
+		dbg_stream("CROP: left:%d, top:%d, width:%d, height:%d",
+			   cropX, cropY, cropWidth, cropHeight);
+	} else {
+		cropX = 0;
+		cropY = 0;
+		cropWidth = srcBuf->width;
+		cropHeight = srcBuf->height;
+	}
+
+	dbg_stream("[%s:%d] scaling start, width:%d, height:%d", __func__, mType,
+			cropWidth, cropHeight);
+	hw_module_t const *pmodule = NULL;
+	gralloc_module_t const *module = getModule();
+	android_ycbcr src, dst;
+	private_handle_t *dstBuf = NULL;
+	struct nx_scaler_context ctx;
+	int ret = 0;
+
+	dstBuf = (private_handle_t*)mScaleBuf;
+	ret = module->lock_ycbcr(module, srcBuf, PROT_READ | PROT_WRITE, 0, 9,
+				 srcBuf->width, srcBuf->height, &src);
+	if (ret) {
+		ALOGE("Failed to lock_ycbcr for the buf - %d", srcBuf->share_fd);
+		goto exit;
+	}
+
+	ret = module->lock_ycbcr(module, dstBuf, PROT_READ | PROT_WRITE, 0, 9,
+				 dstBuf->width, dstBuf->height, &dst);
+	if (ret) {
+		ALOGE("Failed to lock_ycbcr for the buf - %d", dstBuf->share_fd);
+		goto exit;
+	}
+
+	ctx.crop.x = cropX;
+	ctx.crop.y = cropY;
+	ctx.crop.width = cropWidth;
+	ctx.crop.height = cropHeight;
+
+	ctx.src_plane_num = 1;
+	ctx.src_width = srcBuf->width;
+	ctx.src_height = srcBuf->height;
+	ctx.src_code = MEDIA_BUS_FMT_YUYV8_2X8;
+	ctx.src_fds[0] = srcBuf->share_fd;
+	ctx.src_stride[0] = src.ystride;
+	ctx.src_stride[1] = src.cstride;
+	ctx.src_stride[2] = src.cstride;
+
+	ctx.dst_plane_num = 1;
+	ctx.dst_width = dstBuf->width;
+	ctx.dst_height = dstBuf->height;
+	ctx.dst_code = MEDIA_BUS_FMT_YUYV8_2X8;
+	ctx.dst_fds[0] = dstBuf->share_fd;
+	ctx.dst_stride[0] = dst.ystride;
+	ctx.dst_stride[1] = dst.cstride;
+	ctx.dst_stride[2] = dst.cstride;
+
+	ret = nx_scaler_run(mScaler, &ctx);
+	if (ret < 0) {
+		ALOGE("[%s] Failed to scaler set & run ioctl", __func__);
+		goto unlock;
+	}
+	memcpy(src.y, dst.y, srcBuf->size);
+
+unlock:
+	if (module ) {
+		ret = module->unlock(module, srcBuf);
+		if (ret)
+			ALOGE("[%s] Failed to gralloc unlock for srcBuf:%d",
+			      __func__, ret);
+		ret = module->unlock(module, dstBuf);
+		if (ret)
+			ALOGE("[%s] Failed to gralloc unlock for dstBuf:%d",
+			      __func__, ret);
+	}
+
+exit:
 	return ret;
 }
 
@@ -192,6 +294,16 @@ int Stream::sendResult(bool drain)
 		ALOGE("[%s] failed to get buffer", __func__);
 		return -EINVAL;
 	}
+#ifdef CAMERA_USE_ZOOM
+	if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
+			(mType == NX_SNAPSHOT_STREAM) ||
+			(mStream->format == HAL_PIXEL_FORMAT_BLOB)) {
+		dbg_stream("[%s:%d] no need to do scaling", __func__, mType);
+	} else {
+		if (mScaleBuf)
+			scaling(buf->getPrivateHandle(), buf->getMetadata());
+	}
+#endif
 	mCb->capture_result(mCb, mType, buf);
 	mFQ.queue(buf);
 	return ret;
@@ -248,6 +360,11 @@ void Stream::stopStreaming()
 		return;
 	stopV4l2();
 
+#ifdef CAMERA_USE_ZOOM
+	if ((mAllocator) && (mScaleBuf))
+		mAllocator->free(mAllocator, (buffer_handle_t)mScaleBuf);
+	mScaleBuf = NULL;
+#endif
 	dbg_stream("[%s:%d] Exit", __func__, mType);
 }
 
@@ -303,7 +420,8 @@ int Stream::setBufferFormat(private_handle_t *buf)
 	return 0;
 }
 
-int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf)
+int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
+		const camera_metadata_t *meta)
 {
 	int ret = NO_ERROR;
 
@@ -314,7 +432,7 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf)
 		ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
 		return -ENOMEM;
 	}
-	buffer->init(fNum, buf->stream, buf->buffer);
+	buffer->init(fNum, buf->stream, buf->buffer, meta);
 	private_handle_t *b = buffer->getPrivateHandle();
 	dbg_stream("[%s:%d] format:0x%x, width:%d, height:%d size:%d",
 			__func__, mType, b->format, b->width, b->height, b->size);
@@ -367,6 +485,24 @@ status_t Stream::prepareForRun()
 		ALOGE("failed to setBufferFormat:%d, mFd:%d", ret, mFd);
 		goto drain;
 	}
+
+#ifdef CAMERA_USE_ZOOM
+	if (((mType == NX_RECORD_STREAM) && (MAX_VIDEO_HANDLES == 1)) ||
+			(mType == NX_SNAPSHOT_STREAM) ||
+			(mStream->format == HAL_PIXEL_FORMAT_BLOB)) {
+		dbg_stream("[%s:%d] no need to do scaling", __func__, mType);
+	} else {
+		buffer_handle_t buffer;
+		allocBuffer(ph->width, ph->height, ph->format, &buffer);
+		if (buffer == NULL) {
+			ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
+					mType);
+			return -ENOMEM;
+		}
+		mScaleBuf = buffer;
+	}
+#endif
+
 	ret = v4l2_req_buf(mFd, MAX_BUFFER_COUNT);
 	if (ret) {
 		ALOGE("failed to req buf : %d, mFd:%d", ret, mFd);
