@@ -1,7 +1,26 @@
+#include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <cutils/log.h>
+
+#include <camera/CameraMetadata.h>
+
+#include "GlobalDef.h"
+#include "v4l2.h"
+#include "metadata.h"
+
 namespace android {
 
 #define MAX_SUPPORTED_RESOLUTION 64
 #define MAX_SYNC_LATENCY 4
+
+int32_t pixel_array_size[2] = {0, 0};
+
+void getActiveArraySize(uint32_t *width, uint32_t *height)
+{
+	*width = pixel_array_size[0];
+	*height = pixel_array_size[1];
+}
 
 static int32_t checkMinFps(uint32_t count, struct v4l2_frame_interval *f)
 {
@@ -12,8 +31,8 @@ static int32_t checkMinFps(uint32_t count, struct v4l2_frame_interval *f)
 		return min;
 
 	for (i = 1; i < count; i++) {
-		if (f[i].interval[V4L2_INTERVAL_MIN] >
-		    f[i-1].interval[V4L2_INTERVAL_MIN])
+		if (f[i].interval[V4L2_INTERVAL_MIN] <
+				f[i-1].interval[V4L2_INTERVAL_MIN])
 			min = f[i].interval[V4L2_INTERVAL_MIN];
 	}
 	return min;
@@ -29,7 +48,7 @@ static int32_t checkMaxFps(uint32_t count, struct v4l2_frame_interval *f)
 
 	for (i = 1; i < count; i++) {
 		if (f[i].interval[V4L2_INTERVAL_MAX] >
-		    f[i-1].interval[V4L2_INTERVAL_MAX])
+				f[i-1].interval[V4L2_INTERVAL_MAX])
 			max = f[i].interval[V4L2_INTERVAL_MAX];
 	}
 	return max;
@@ -60,9 +79,9 @@ static uint32_t getFrameInfo(int fd, struct v4l2_frame_interval *frames)
 		frames[r].index = j;
 		ret = v4l2_get_framesize(fd, &frames[r]);
 		if (!ret) {
-			ALOGD("[%d] width:%d, height:%d",
+			ALOGDI("[%d] width:%d, height:%d",
 			      r, frames[r].width, frames[r].height);
-			if ((frames[r].width % 32) == 0) {
+			if (((frames[r].width % 32) == 0)) {
 				for (int i = 0; i <= V4L2_INTERVAL_MAX; i++) {
 					ret = v4l2_get_frameinterval(fd,
 								     &frames[r],
@@ -72,7 +91,7 @@ static uint32_t getFrameInfo(int fd, struct v4l2_frame_interval *frames)
 						      frames[r].width, frames[r].height);
 						return r;
 					}
-					ALOGD("width:%d, height:%d, %s interval:%d",
+					ALOGDI("width:%d, height:%d, %s interval:%d",
 					      frames[r].width, frames[r].height,
 					      (i) ? "max":"min", frames[r].interval[i]);
 				}
@@ -152,13 +171,16 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 
 	struct v4l2_frame_interval frames[MAX_SUPPORTED_RESOLUTION];
 	int r = getFrameInfo(fd, frames);
-	ALOGD("[%s] supported resolutions count:%d", __func__, r);
+	ALOGDI("[%s] supported resolutions count:%d", __func__, r);
 	if (!r) {
 		ALOGE("sensor resolution value is invalid");
 		return NULL;
 	}
-	/* pixel size for preview and still capture */
-	int32_t pixel_array_size[2] = {frames[0].width, frames[0].height};
+	/* pixel size for preview and still capture
+	 * ACTIVE_ARRAY_SIZE should be similar with MAX_JPEG_SIZE
+	 * */
+	pixel_array_size[0] = frames[r-1].width;
+	pixel_array_size[1] = frames[r-1].height;
 	staticInfo.update(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
 			  pixel_array_size, 2);
 	int32_t active_array_size[] = {
@@ -168,18 +190,25 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 	};
 	staticInfo.update(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE,
 			  active_array_size, 4);
-
 	int32_t max_fps = checkMaxFps(r, frames);
 	int32_t min_fps = checkMinFps(r, frames);
+	/* For a device supports Limited Level
+	 * available_fps_ranges is {min_fps, max_fps, max_fps, max_fps}
+	 * min_fps <= 15 and max_fps = max frame rate
+	 */
+	int32_t record_fps = (min_fps + 5);
 	int32_t available_fps_ranges[] = {
-		min_fps, max_fps, max_fps, max_fps
+		min_fps, max_fps, record_fps, record_fps
 	};
 	staticInfo.update(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES,
 			  available_fps_ranges,
 			  sizeof(available_fps_ranges)/sizeof(int32_t));
-
 	/* For CTS: android.hardware.camera2.cts.RecordingTest#testBasicRecording */
+#if 0
 	int64_t max = max_fps * 1e9;
+#else
+	int64_t max = min_fps * 1e9;
+#endif
 	staticInfo.update(ANDROID_SENSOR_INFO_MAX_FRAME_DURATION,
 			  &max, 1);
 
@@ -275,9 +304,10 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 	int32_t available_stream_configs[array_size];
 	int64_t available_frame_min_durations[array_size];
 	for(int f = 0; f < fmt_count; f++) {
+#if 1
 		for (int j = 0; j < r ; j++) {
 			int offset = f*4*r + j*4;
-			ALOGD("[%s] f:%d, j:%d, r:%d, offset:%d", __func__, f, j, r, offset);
+			ALOGDI("[%s] f:%d, j:%d, r:%d, offset:%d", __func__, f, j, r, offset);
 			available_stream_configs[offset] = scaler_formats[f];
 			available_stream_configs[1+offset] = frames[j].width;
 			available_stream_configs[2+offset] = frames[j].height;
@@ -287,6 +317,22 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 			available_frame_min_durations[2+offset] = frames[j].height;
 			available_frame_min_durations[3+offset] = frames[j].interval[V4L2_INTERVAL_MIN];
 		}
+#else
+		int m = r -1;
+		for (int j = 0; j < r ; j++) {
+			int offset = f*4*r + j*4;
+			ALOGDI("[%s] f:%d, j:%d, r:%d, offset:%d", __func__, f, j, r, offset);
+			available_stream_configs[offset] = scaler_formats[f];
+			available_stream_configs[1+offset] = frames[m].width;
+			available_stream_configs[2+offset] = frames[m].height;
+			available_stream_configs[3+offset] = ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT;
+			available_frame_min_durations[offset] = scaler_formats[f];
+			available_frame_min_durations[1+offset] = frames[m].width;
+			available_frame_min_durations[2+offset] = frames[m].height;
+			available_frame_min_durations[3+offset] = frames[m].interval[V4L2_INTERVAL_MIN];
+			m--;
+		}
+#endif
 	}
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS,
 			  available_stream_configs,
@@ -673,8 +719,447 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 
 	meta = staticInfo.release();
 
-	ALOGD("End initStaticMetadata");
+	ALOGDI("End initStaticMetadata");
 	return meta;
+}
+
+camera_metadata_t* translateMetadata (const camera_metadata_t *request,
+		exif_attribute_t *exif,
+		nsecs_t timestamp,
+		uint8_t pipeline_depth)
+{
+	if (request == NULL) {
+		ALOGDI("[%s] No Metadata", __func__);
+		return NULL;
+	}
+	CameraMetadata meta;
+	camera_metadata_t *result;
+	CameraMetadata metaData;
+
+	meta = request;
+
+	ALOGDV("[%s] Exif:%s, timestamp:%ld, pipeline:%d", __func__,
+			(exif) ? "exist" : "null", timestamp, pipeline_depth);
+
+	if (meta.exists(ANDROID_REQUEST_ID)) {
+		int32_t request_id = meta.find(ANDROID_REQUEST_ID).data.i32[0];
+		metaData.update(ANDROID_REQUEST_ID, &request_id, 1);
+	}
+	metaData.update(ANDROID_SENSOR_TIMESTAMP, &timestamp, 1);
+	metaData.update(ANDROID_REQUEST_PIPELINE_DEPTH, &pipeline_depth, 1);
+
+	if (meta.exists(ANDROID_CONTROL_CAPTURE_INTENT)) {
+		uint8_t capture_intent =
+			meta.find(ANDROID_CONTROL_CAPTURE_INTENT).data.u8[0];
+		ALOGDV("capture_intent:%d", capture_intent);
+		metaData.update(ANDROID_CONTROL_CAPTURE_INTENT, &capture_intent, 1);
+	}
+
+	if (meta.exists(ANDROID_CONTROL_AE_TARGET_FPS_RANGE)) {
+		int32_t fps_range[2];
+		fps_range[0] = meta.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE).data.i32[0];
+		fps_range[1] = meta.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE).data.i32[1];
+		ALOGDV("ANDROID_CONTROL_AE_TARGET_FPS_RANGE-min:%d,max:%d",
+				fps_range[0], fps_range[1]);
+		metaData.update(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, fps_range, 2);
+	}
+	if (meta.exists(ANDROID_CONTROL_AF_TRIGGER) &&
+	meta.exists(ANDROID_CONTROL_AF_TRIGGER_ID)) {
+		uint8_t trigger = meta.find(ANDROID_CONTROL_AF_TRIGGER).data.u8[0];
+		int32_t trigger_id = meta.find(ANDROID_CONTROL_AF_TRIGGER_ID).data.i32[0];
+		uint8_t afState;
+
+		metaData.update(ANDROID_CONTROL_AF_TRIGGER, &trigger, 1);
+		if (trigger == ANDROID_CONTROL_AF_TRIGGER_START) {
+			ALOGDV("AF_TRIGGER_START");
+			afState = ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+		} else if (trigger == ANDROID_CONTROL_AF_TRIGGER_CANCEL) {
+			ALOGDV("AF_TRIGGER_CANCELL");
+			afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		} else {
+			ALOGDV("AF_TRIGGER_IDLE");
+			afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		}
+		ALOGDV("ANDROID_CONTROL_AF_STATE:%d", afState);
+		metaData.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AF_MODE)) {
+		uint8_t afMode = meta.find(ANDROID_CONTROL_AF_MODE).data.u8[0];
+		uint8_t afState;
+		ALOGDV("ANDROID_CONTROL_AF_MODE:%d", afMode);
+		if ((afMode == ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE) ||
+				(afMode == ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO))
+			afMode = ANDROID_CONTROL_AF_MODE_OFF;
+		metaData.update(ANDROID_CONTROL_AF_MODE, &afMode, 1);
+		if (afMode == ANDROID_CONTROL_AF_MODE_OFF)
+			afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		else
+			afState = ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED;
+		metaData.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION)) {
+		ALOGDV("ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION");
+		int32_t expCompensation =
+			meta.find(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION).data.i32[0];
+		metaData.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &expCompensation, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_MODE)) {
+		uint8_t metaMode = meta.find(ANDROID_CONTROL_MODE).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_MODE:%d", metaMode);
+		metaData.update(ANDROID_CONTROL_MODE, &metaMode, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_LOCK)) {
+		uint8_t aeLock = meta.find(ANDROID_CONTROL_AE_LOCK).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_AE_LOCK:%d", aeLock);
+		metaData.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_MODE)) {
+		uint8_t aeMode = meta.find(ANDROID_CONTROL_AE_MODE).data.u8[0];
+		uint8_t aeState = ANDROID_CONTROL_AE_STATE_CONVERGED;
+		//uint8_t aeState = ANDROID_CONTROL_AE_STATE_INACTIVE;
+		ALOGDV("ANDROID_CONTROL_AE_MODE:%d", aeMode);
+		if (aeMode != ANDROID_CONTROL_AE_MODE_OFF)
+			aeMode = ANDROID_CONTROL_AE_MODE_OFF;
+		metaData.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
+		metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_ANTIBANDING_MODE)) {
+		uint8_t aeAntiBandingMode = meta.find(ANDROID_CONTROL_AE_ANTIBANDING_MODE).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_AE_ANTIBANDING_MODE:%d", aeAntiBandingMode);
+		metaData.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &aeAntiBandingMode, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER) &&
+		meta.exists(ANDROID_CONTROL_AE_PRECAPTURE_ID)) {
+		uint8_t trigger = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER).data.u8[0];
+		uint8_t trigger_id = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_ID).data.u8[0];
+		uint8_t aeState;
+
+		ALOGDV("ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER:%d, ID:%d", trigger, trigger_id);
+		metaData.update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &trigger, 1);
+		if (trigger == ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_START) {
+			aeState = ANDROID_CONTROL_AE_STATE_LOCKED;
+			//uint8_t aeState = ANDROID_CONTROL_AE_STATE_CONVERGED;
+			//metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
+		} else {
+			aeState = ANDROID_CONTROL_AE_STATE_INACTIVE;
+			metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
+		}
+		ALOGDV("ANDROID_CONTROL_AE_STATE:%d", aeState);
+	}
+	if (meta.exists(ANDROID_CONTROL_AWB_LOCK)) {
+		uint8_t awbLock =
+			meta.find(ANDROID_CONTROL_AWB_LOCK).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_AWB_LOCK:%d", awbLock);
+		metaData.update(ANDROID_CONTROL_AWB_LOCK, &awbLock, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_AWB_MODE)) {
+		uint8_t awbMode =
+			meta.find(ANDROID_CONTROL_AWB_MODE).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_AWB_MODE:%d", awbMode);
+		if (awbMode != ANDROID_CONTROL_AWB_MODE_OFF)
+			awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
+		metaData.update(ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
+		uint8_t awbState = ANDROID_CONTROL_AWB_STATE_CONVERGED;
+		//uint8_t awbState = ANDROID_CONTROL_AWB_STATE_INACTIVE;
+		ALOGDV("ANDROID_CONTROL_AWB_STATE:%d", awbState);
+		metaData.update(ANDROID_CONTROL_AWB_STATE, &awbState, 1);
+		if (exif)
+			exif->setWhiteBalance(awbMode);
+	}
+	if (meta.exists(ANDROID_CONTROL_SCENE_MODE)) {
+		uint8_t sceneMode = meta.find(ANDROID_CONTROL_SCENE_MODE).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_SCENE_MODE:%d", sceneMode);
+		metaData.update(ANDROID_CONTROL_SCENE_MODE, &sceneMode, 1);
+		if (exif)
+			exif->setSceneCaptureType(sceneMode);
+	}
+	/*
+	if (meta.exists(ANDROID_COLOR_CORRECTION_MODE)) {
+	uint8_t colorCorrectMode =
+	meta.find(ANDROID_COLOR_CORRECTION_MODE).data.u8[0];
+	ALOGDI("ANDROID_COLOR_CORRECTION_MODE:%d", colorCorrectMode);
+	metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorCorrectMode, 1);
+	}
+	*/
+	if (meta.exists(ANDROID_COLOR_CORRECTION_ABERRATION_MODE)) {
+		uint8_t colorCorrectAbeMode =
+			meta.find(ANDROID_COLOR_CORRECTION_ABERRATION_MODE).data.u8[0];
+		ALOGDV("ANDROID_COLOR_CORRECTION_ABERRATION_MODE:%d", colorCorrectAbeMode);
+		metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorCorrectAbeMode, 1);
+	}
+	if (meta.exists(ANDROID_FLASH_MODE)) {
+		uint8_t flashMode = meta.find(ANDROID_FLASH_MODE).data.u8[0];
+		uint8_t flashState = ANDROID_FLASH_STATE_UNAVAILABLE;
+		ALOGDV("ANDROID_FLASH_MODE:%d", flashMode);
+		if (flashMode != ANDROID_FLASH_MODE_OFF)
+			flashState = ANDROID_FLASH_STATE_READY;
+		ALOGDV("ANDROID_FLASH_STATE:%d", flashState);
+		metaData.update(ANDROID_FLASH_STATE, &flashState, 1);
+		metaData.update(ANDROID_FLASH_MODE, &flashMode, 1);
+		if (exif)
+			exif->setFlashMode(flashMode);
+	}
+	/*
+	if (meta.exists(ANDROID_EDGE_MODE)) {
+		uint8_t edgeMode = meta.find(ANDROID_EDGE_MODE).data.u8[0];
+		ALOGDI("ANDROID_EDGE_MODE:%d", edgeMode);
+		metaData.update(ANDROID_EDGE_MODE, &edgeMode, 1);
+	}
+	if (meta.exists(ANDROID_HOT_PIXEL_MODE)) {
+		uint8_t hotPixelMode =
+		meta.find(ANDROID_HOT_PIXEL_MODE).data.u8[0];
+		ALOGDI("ANDROID_HOT_PIXEL_MODE:%d", hotPixelMode);
+		metaData.update(ANDROID_HOT_PIXEL_MODE, &hotPixelMode, 1);
+	}
+	*/
+	if (meta.exists(ANDROID_LENS_FOCAL_LENGTH)) {
+		float focalLength =
+			meta.find(ANDROID_LENS_FOCAL_LENGTH).data.f[0];
+		ALOGDV("ANDROID_LENS_FOCAL_LENGTH:%f", focalLength);
+		metaData.update(ANDROID_LENS_FOCAL_LENGTH, &focalLength, 1);
+		rational_t focal_length;
+		focal_length.num = (uint32_t)(focalLength * EXIF_DEF_FOCAL_LEN_DEN);
+		focal_length.den = EXIF_DEF_FOCAL_LEN_DEN;
+		if (exif)
+			exif->setFocalLength(focal_length);
+	}
+	if (meta.exists(ANDROID_LENS_OPTICAL_STABILIZATION_MODE)) {
+		uint8_t optStabMode =
+			meta.find(ANDROID_LENS_OPTICAL_STABILIZATION_MODE).data.u8[0];
+		ALOGDV("ANDROID_LENS_OPTICAL_STABILIZATION_MODE:%d", optStabMode);
+		metaData.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &optStabMode, 1);
+	}
+	if (meta.exists(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE)) {
+		uint8_t vsMode = meta.find(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_VIDEO_STABILIZATION_MODE:%d", vsMode);
+		metaData.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vsMode, 1);
+	}
+	if (meta.exists(ANDROID_SCALER_CROP_REGION)) {
+		int32_t scalerCropRegion[4];
+		bool scaling = true;
+		scalerCropRegion[0] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[0];
+		scalerCropRegion[1] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[1];
+		scalerCropRegion[2] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[2];
+		scalerCropRegion[3] = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[3];
+		ALOGDV("ANDROID_SCALER_CROP_REGION:left-%d,top-%d,width-%d,height-%d",
+				scalerCropRegion[0], scalerCropRegion[1], scalerCropRegion[2],
+				scalerCropRegion[3]);
+		metaData.update(ANDROID_SCALER_CROP_REGION, scalerCropRegion, 4);
+		if (((scalerCropRegion[2] - scalerCropRegion[0]) == pixel_array_size[0]) &&
+				((scalerCropRegion[3] - scalerCropRegion[1]) == pixel_array_size[1]))
+				scaling = false;
+		if (scaling && exif)
+			exif->setCropResolution(scalerCropRegion[0], scalerCropRegion[1],
+					scalerCropRegion[2], scalerCropRegion[3]);
+		else if (exif)
+			exif->setCropResolution(0, 0, 0, 0);
+	} else {
+		if (exif)
+			exif->setCropResolution(0, 0, 0, 0);
+	}
+
+	if (meta.exists(ANDROID_SENSOR_EXPOSURE_TIME)) {
+		int64_t sensorExpTime =
+			meta.find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
+		ALOGDV("ANDROID_SENSOR_EXPOSURE_TIME:%ld", sensorExpTime);
+		metaData.update(ANDROID_SENSOR_EXPOSURE_TIME, &sensorExpTime, 1);
+		if (exif)
+			exif->setExposureTime(sensorExpTime);
+	}
+	if (meta.exists(ANDROID_SENSOR_FRAME_DURATION)) {
+		int64_t sensorFrameDuration =
+			meta.find(ANDROID_SENSOR_FRAME_DURATION).data.i64[0];
+		int64_t minFrameDuration = 0;
+		if (meta.exists(ANDROID_CONTROL_AE_TARGET_FPS_RANGE)) {
+			minFrameDuration = meta.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE).data.i32[0];
+			ALOGDI("minFrame:%ld", minFrameDuration);
+			minFrameDuration = (long) 1e9/ minFrameDuration;
+		}
+		ALOGDV("ANDROID_SENSOR_FRAME_DURATION:%ld, Min:%ld",
+				sensorFrameDuration, minFrameDuration);
+		if (sensorFrameDuration < minFrameDuration)
+			sensorFrameDuration = minFrameDuration;
+		metaData.update(ANDROID_SENSOR_FRAME_DURATION, &sensorFrameDuration, 1);
+	}
+	/*
+	if (meta.exists(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW)) {
+		int64_t sensorRollingShutterSkew =
+		meta.find(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW).data.i64[0];
+		ALOGDI("ANDROID_SENSOR_ROLLING_SHUTTER_SKEW:%ld", sensorRollingShutterSkew);
+		metaData.update(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW, &sensorRollingShutterSkew, 1);
+	}
+	*/
+	if (meta.exists(ANDROID_SHADING_MODE)) {
+		uint8_t  shadingMode =
+			meta.find(ANDROID_SHADING_MODE).data.u8[0];
+		ALOGDV("ANDROID_SHADING_MODE:%d", shadingMode);
+		metaData.update(ANDROID_SHADING_MODE, &shadingMode, 1);
+	}
+	if (meta.exists(ANDROID_STATISTICS_FACE_DETECT_MODE)) {
+		uint8_t fwk_facedetectMode =
+			meta.find(ANDROID_STATISTICS_FACE_DETECT_MODE).data.u8[0];
+		ALOGDV("ANDROID_STATISTICS_FACE_DETECT_MODE:%d", fwk_facedetectMode);
+		metaData.update(ANDROID_STATISTICS_FACE_DETECT_MODE, &fwk_facedetectMode, 1);
+	}
+	if (meta.exists(ANDROID_STATISTICS_LENS_SHADING_MAP)) {
+		uint8_t sharpnessMapMode =
+			meta.find(ANDROID_STATISTICS_LENS_SHADING_MAP).data.u8[0];
+		ALOGDV("ANDROID_STATISTICS_LENS_SHADING_MAP:%d", sharpnessMapMode);
+		metaData.update(ANDROID_STATISTICS_LENS_SHADING_MAP, &sharpnessMapMode, 1);
+	}
+#if 0
+	if (meta.exists(ANDROID_COLOR_CORRECTION_GAINS)) {
+		float colorCorrectGains[4];
+		colorCorrectGains[0] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[0];
+		colorCorrectGains[1] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[1];
+		colorCorrectGains[2] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[2];
+		colorCorrectGains[3] = meta.find(ANDROID_COLOR_CORRECTION_GAINS).data.f[3];
+		ALOGDI("ANDROID_COLOR_CORRECTION_GAINS-ColorGain:%f,%f,%f,%f",
+				colorCorrectGains[0], colorCorrectGains[1], colorCorrectGains[2],
+				colorCorrectGains[3]);
+		metaData.update(ANDROID_COLOR_CORRECTION_GAINS, colorCorrectGains, 4);
+	}
+	if (meta.exists(ANDROID_COLOR_CORRECTION_TRANSFORM)) {
+		camera_metadata_rational_t ccTransform[9];
+		ccTransform[0].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[0].numerator;
+		ccTransform[0].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[0].denominator;
+		ccTransform[1].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[1].numerator;
+		ccTransform[1].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[1].denominator;
+		ccTransform[2].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[2].numerator;
+		ccTransform[2].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[2].denominator;
+		ccTransform[3].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[3].numerator;
+		ccTransform[3].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[3].denominator;
+		ccTransform[4].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[4].numerator;
+		ccTransform[4].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[4].denominator;
+		ccTransform[5].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[5].numerator;
+		ccTransform[5].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[5].denominator;
+		ccTransform[6].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[6].numerator;
+		ccTransform[6].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[6].denominator;
+		ccTransform[7].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[7].numerator;
+		ccTransform[7].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[7].denominator;
+		ccTransform[8].numerator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[8].numerator;
+		ccTransform[8].denominator = meta.find(ANDROID_COLOR_CORRECTION_TRANSFORM).data.r[8].denominator;
+		ALOGDI("ANDROID_COLOR_CORRECTION_TRANSFORM:%d/%d, %d/%d, %d/%d",
+		ccTransform[0].numerator/ccTransform[0].denominator,
+		ccTransform[1].numerator/ccTransform[1].denominator,
+		ccTransform[2].numerator/ccTransform[2].denominator,
+		ccTransform[3].numerator/ccTransform[0].denominator,
+		ccTransform[4].numerator/ccTransform[1].denominator,
+		ccTransform[5].numerator/ccTransform[2].denominator,
+		ccTransform[6].numerator/ccTransform[0].denominator,
+		ccTransform[7].numerator/ccTransform[1].denominator,
+		ccTransform[8].numerator/ccTransform[2].denominator);
+		metaData.update(ANDROID_COLOR_CORRECTION_TRANSFORM, ccTransform, 9);
+	}
+#endif
+	if (meta.exists(ANDROID_CONTROL_EFFECT_MODE)) {
+		uint8_t fwk_effectMode =
+			meta.find(ANDROID_CONTROL_EFFECT_MODE).data.u8[0];
+		ALOGDV("ANDROID_CONTROL_EFFECT_MODE:%d", fwk_effectMode);
+		metaData.update(ANDROID_CONTROL_EFFECT_MODE, &fwk_effectMode, 1);
+	}
+	if (meta.exists(ANDROID_SENSOR_TEST_PATTERN_MODE)) {
+		int32_t fwk_testPatternMode =
+			meta.find(ANDROID_SENSOR_TEST_PATTERN_MODE).data.i32[0];
+		ALOGDV("ANDROID_SENSOR_TEST_PATTERN_MODE:%d", fwk_testPatternMode);
+		metaData.update(ANDROID_SENSOR_TEST_PATTERN_MODE, &fwk_testPatternMode, 1);
+	}
+	if (meta.exists(ANDROID_JPEG_ORIENTATION)) {
+		int32_t orientation =
+			meta.find(ANDROID_JPEG_ORIENTATION).data.i32[0];
+		ALOGDV("ANDROID_JPEG_ORIENTATION:%d", orientation);
+		metaData.update(ANDROID_JPEG_ORIENTATION, &orientation, 1);
+		int32_t exifOri;
+		if (orientation == 90)
+			exifOri = EXIF_ORIENTATION_90;
+		else if(orientation == 180)
+			exifOri = EXIF_ORIENTATION_180;
+		else if(orientation == 270)
+			exifOri = EXIF_ORIENTATION_270;
+		else
+			exifOri = EXIF_ORIENTATION_UP;
+		if (exif)
+			exif->setOrientation(exifOri);
+	}
+	if (meta.exists(ANDROID_JPEG_QUALITY)) {
+		uint8_t quality =
+			meta.find(ANDROID_JPEG_QUALITY).data.u8[0];
+		ALOGDV("ANDROID_JPEG_QUALITY:%d", quality);
+		metaData.update(ANDROID_JPEG_QUALITY, &quality, 1);
+	}
+	if (meta.exists(ANDROID_JPEG_THUMBNAIL_QUALITY)) {
+		uint8_t thumb_quality =
+			meta.find(ANDROID_JPEG_THUMBNAIL_QUALITY).data.u8[0];
+		ALOGDV("ANDROID_JPEG_THUMBNAIL_QUALITY:%d", thumb_quality);
+		metaData.update(ANDROID_JPEG_THUMBNAIL_QUALITY, &thumb_quality, 1);
+		if (exif)
+			exif->setThumbnailQuality(thumb_quality);
+	}
+	if (meta.exists(ANDROID_JPEG_THUMBNAIL_SIZE)) {
+		int32_t size[2];
+		size[0] = meta.find(ANDROID_JPEG_THUMBNAIL_SIZE).data.i32[0];
+		size[1] = meta.find(ANDROID_JPEG_THUMBNAIL_SIZE).data.i32[1];
+		ALOGDV("ANDROID_JPEG_THUMBNAIL_SIZE- width:%d, height:%d",
+				size[0], size[1]);
+		metaData.update(ANDROID_JPEG_THUMBNAIL_SIZE, size, 2);
+		if (exif)
+			exif->setThumbResolution(size[0], size[1]);
+	} else {
+		if (exif)
+			exif->setThumbResolution(0, 0);
+	}
+
+	if (meta.exists(ANDROID_JPEG_GPS_COORDINATES)) {
+		double gps[3];
+		gps[0] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[0];
+		gps[1] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[1];
+		gps[2] = meta.find(ANDROID_JPEG_GPS_COORDINATES).data.d[2];
+		ALOGDV("ANDROID_JPEG_GPS_COORDINATES-%f:%f:%f", gps[0], gps[1], gps[2]);
+		if (exif)
+			exif->setGpsCoordinates(gps);
+		metaData.update(ANDROID_JPEG_GPS_COORDINATES, gps, 3);
+	} else {
+		double gps[3];
+		memset(gps, 0x0, sizeof(double) * 3);
+		if (exif)
+			exif->setGpsCoordinates(gps);
+	}
+
+	if (meta.exists(ANDROID_JPEG_GPS_PROCESSING_METHOD)) {
+		ALOGDV("ANDROID_JPEG_GPS_PROCESSING_METHOD count:%d",
+				meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
+		if (exif)
+			exif->setGpsProcessingMethod(meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
+					meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
+		metaData.update(ANDROID_JPEG_GPS_PROCESSING_METHOD,
+				meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).data.u8,
+				meta.find(ANDROID_JPEG_GPS_PROCESSING_METHOD).count);
+	}
+
+	if (meta.exists(ANDROID_JPEG_GPS_TIMESTAMP)) {
+		int64_t timestamp = meta.find(ANDROID_JPEG_GPS_TIMESTAMP).data.i64[0];
+		ALOGDV("ANDROID_JPEG_GPS_TIMESTAMP:%lld", timestamp);
+		if (exif)
+			exif->setGpsTimestamp(timestamp);
+		metaData.update(ANDROID_JPEG_GPS_TIMESTAMP, &timestamp, 1);
+	}
+
+	if (meta.exists(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE)) {
+		uint8_t shadingMode =
+			meta.find(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE).data.u8[0];
+		ALOGDV("ANDROID_STATISTICS_LENS_SHADING_MAP_MODE:%d", shadingMode);
+		metaData.update(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE, &shadingMode, 1);
+	}
+	/*
+	if (meta.exists(ANDROID_STATISTICS_SCENE_FLICKER)) {
+		uint8_t sceneFlicker =
+		meta.find(ANDROID_STATISTICS_SCENE_FLICKER).data.u8[0];
+		ALOGDI("ANDROID_STATISTICS_SCENE_FLICKER:%d", sceneFlicker);
+		metaData.update(ANDROID_STATISTICS_SCENE_FLICKER, &sceneFlicker, 1);
+	}
+	*/
+	result = metaData.release();
+	return result;
 }
 
 }; /*namespace android*/

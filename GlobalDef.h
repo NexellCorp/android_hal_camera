@@ -35,9 +35,13 @@
 
 /*#define TRACE_STREAM*/
 #ifdef TRACE_STREAM
-#define dbg_stream(a...)		ALOGD(a)
+#define ALOGDD(a...)			ALOGD(a)
+#define ALOGDI(a...)			ALOGD(a)
+#define ALOGDV(a...)			/*ALOGD(a)*/
 #else
-#define dbg_stream(a...)
+#define ALOGDD(a...)
+#define ALOGDI(a...)
+#define ALOGDV(a...)
 #endif
 
 #endif

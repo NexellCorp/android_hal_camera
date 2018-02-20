@@ -8,6 +8,7 @@
 #include <linux/videodev2.h>
 
 #include <cutils/log.h>
+#include "GlobalDef.h"
 #include "v4l2.h"
 
 namespace android {
@@ -80,7 +81,7 @@ int v4l2_dqbuf(int fd, int *index, int32_t dma_fd[], uint32_t num_planes)
 	struct v4l2_plane planes[num_planes];
 	int ret;
 
-	ALOGV("[%s]\n", __func__);
+	ALOGV("[%s]", __func__);
 
 	bzero(&buf, sizeof(struct v4l2_buffer));
 	bzero(planes, sizeof(struct v4l2_plane)*num_planes);
@@ -104,7 +105,7 @@ int v4l2_streamon(int fd)
 {
 	uint32_t buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
-	ALOGD("[%s]\n", __func__);
+	ALOGDV("[%s]", __func__);
 	return ioctl(fd, VIDIOC_STREAMON, &buf_type);
 }
 
@@ -112,7 +113,7 @@ int v4l2_streamoff(int fd)
 {
 	uint32_t buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
-	ALOGD("[%s]\n", __func__);
+	ALOGDV("[%s]", __func__);
 	return ioctl(fd, VIDIOC_STREAMOFF, &buf_type);
 }
 
@@ -121,13 +122,13 @@ int v4l2_get_framesize(int fd, struct v4l2_frame_interval *f)
 	struct v4l2_frmsizeenum frame;
 	int ret = 0;
 
-	ALOGD("[%s] index:%d", __func__, f->index);
+	ALOGDV("[%s] index:%d", __func__, f->index);
 	frame.index = f->index;
 	ret = ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frame);
 	if (!ret) {
 		f->width = frame.stepwise.max_width;
 		f->height = frame.stepwise.max_height;
-		ALOGD("[%s] index:%d, width:%d, height:%d", __func__,
+		ALOGDV("[%s] index:%d, width:%d, height:%d", __func__,
 			f->index, f->width, f->height);
 	} else
 		ALOGE("[%s] failed to get frame size ret:%d", __func__, ret);
@@ -139,14 +140,14 @@ int v4l2_get_frameinterval(int fd, struct v4l2_frame_interval *f, int minOrMax)
 	struct v4l2_frmivalenum frame;
 	int ret;
 
-	ALOGD("[%s] index:%d", __func__, f->index);
+	ALOGDV("[%s] index:%d", __func__, f->index);
 	frame.index = minOrMax;
 	frame.width = f->width;
 	frame.height = f->height;
 	ret = ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &frame);
 	if (!ret) {
 		f->interval[frame.index] = frame.discrete.denominator;
-		ALOGD("index:%d, width:%d, height:%d, interval:%d",
+		ALOGDV("index:%d, width:%d, height:%d, interval:%d",
 				f->index, f->width, f->height, f->interval[frame.index]);
 	} else
 		ALOGE("failed to get frame interval information :%d", ret);

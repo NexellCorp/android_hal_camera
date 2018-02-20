@@ -30,6 +30,7 @@ LOCAL_SRC_FILES := \
 	Stream.cpp \
 	Exif.cpp \
 	v4l2.cpp \
+	metadata.cpp \
 	ExifProcessor.cpp
 LOCAL_SHARED_LIBRARIES := \
 	liblog \

@@ -16,6 +16,7 @@
 #include <nx-scaler.h>
 #include "GlobalDef.h"
 #include "v4l2.h"
+#include "metadata.h"
 #include "StreamManager.h"
 #include "Camera3HWInterface.h"
 
@@ -23,8 +24,6 @@
 #define NSEC_PER_33MSEC 33000000LL
 
 namespace android {
-
-#include "metadata.cpp"
 
 const camera_metadata_t *gStaticMetadata[NUM_OF_CAMERAS] = {0, };
 
@@ -147,7 +146,6 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		return -ENODEV;
 	}
 	mHandles[0] = fd;
-	ALOGD("mHandle[0] = %d", fd);
 	if (MAX_VIDEO_HANDLES > 1) {
 		if (mCameraId == 0)
 			fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
@@ -159,8 +157,8 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 			return -ENODEV;
 		}
 		mHandles[1] = fd;
-		ALOGD("mHandle[1] = %d", fd);
 	}
+
 	mCallbacks = callback;
 	for (int j = 0; j < CAMERA3_TEMPLATE_MANUAL; j++) {
 		mRequestMetadata[j] = NULL;
@@ -475,8 +473,6 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * reque
 	int ret = -EINVAL;
 	const camera3_stream_buffer_t *buf;
 
-	ALOGD("[%s]", __func__);
-
 	if (request == NULL) {
 		ALOGE("[%s] capture request is NULL", __func__);
 		return ret;
@@ -488,6 +484,30 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * reque
 		return ret;
 	}
 
+	if (request->input_buffer != NULL) {
+		buf = request->input_buffer;
+		if (buf->release_fence != -1) {
+			ALOGE("[Input] release fence is not -1");
+			return ret;
+		}
+		if (buf->status != CAMERA3_BUFFER_STATUS_OK) {
+			ALOGE("[Input] status is not OK\n");
+			sendResult();
+			return ret;
+		}
+		if (buf->buffer == NULL) {
+			ALOGE("[Input] buffer handle is NULL\n");
+			return ret;
+		}
+		if (*(buf->buffer) == NULL) {
+			ALOGE("[Input] private handle is NULL\n");
+			return ret;
+		}
+		if (buf->stream->format == HAL_PIXEL_FORMAT_BLOB) {
+			ALOGE("[Input] invalid input buffer format");
+			return ret;
+		}
+	}
 	if ((request->num_output_buffers < 1) ||
 			(request->output_buffers == NULL)) {
 		ALOGE("[%s] output buffer is NULL", __FUNCTION__);
@@ -497,20 +517,20 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * reque
 	for (uint32_t i = 0; i < request->num_output_buffers; i++) {
 		buf = request->output_buffers + i;
 		if (buf->release_fence != -1) {
-			ALOGE("[Buffer:%d] release fence is not -1", i);
+			ALOGE("[Output:%d] release fence is not -1", i);
 			return ret;
 		}
 		if (buf->status != CAMERA3_BUFFER_STATUS_OK) {
-			ALOGE("[Buffer:%d] status is not OK\n", i);
+			ALOGE("[Output:%d] status is not OK\n", i);
 			sendResult();
 			return ret;
 		}
 		if (buf->buffer == NULL) {
-			ALOGE("[Buffer:%d] buffer handle is NULL\n", i);
+			ALOGE("[Output:%d] buffer handle is NULL\n", i);
 			return ret;
 		}
 		if (*(buf->buffer) == NULL) {
-			ALOGE("[Buffer:%d] private handle is NULL\n", i);
+			ALOGE("[Output:%d] private handle is NULL\n", i);
 			return ret;
 		}
 	}
@@ -527,9 +547,6 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 		sendResult();
 		return ret;
 	}
-
-	if (request->input_buffer != NULL)
-		ALOGE("We can't support input buffer!!!");
 
 	if (mStreamManager != NULL) {
 		ret = mStreamManager->registerRequests(request);
@@ -619,7 +636,7 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 	info->conflicting_devices_length = 0;
 
 	if (gStaticMetadata[camera_id] == NULL)
-		gStaticMetadata[camera_id] = ::android::android::initStaticMetadata(camera_id, fd);
+		gStaticMetadata[camera_id] = initStaticMetadata(camera_id, fd);
 	info->static_camera_characteristics = gStaticMetadata[camera_id];
 
 	ALOGI("======camera info =====\n");

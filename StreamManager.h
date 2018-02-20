@@ -26,6 +26,7 @@ typedef struct nx_camera_request {
 	uint32_t frame_number;
 	uint32_t num_output_buffers;
 	const camera_metadata_t *meta;
+	const camera3_stream_buffer_t *input_buffer;
 } nx_camera_request_t;
 
 class StreamManager : public Thread {
@@ -35,28 +36,29 @@ public:
 		: mScaler(scaler),
 		mAllocator(allocator),
 		mCb(callback),
-		mMode(0),
 		mNumBuffers(0),
-		mPipeLineDepth(0) {
-			ALOGD("[%s] Create", __func__);
+		mPipeLineDepth(0),
+		mMeta(NULL) {
+			ALOGDD("[%s] Create", __func__);
 			for (int i = 0; i < MAX_VIDEO_HANDLES; i++) {
 				mFd[i] = fd[i];
-				dbg_stream("[%s] fd[%d]=%d", __func__, i, mFd[i]);
+				ALOGDD("[%s] fd[%d]=%d", __func__, i, mFd[i]);
 			}
 			mResultCb.priv = this;
 			mResultCb.capture_result =
 				&StreamManager::getCaptureResult;
-			for (int i = 0; i < NX_RECORD_STREAM; i++)
+			for (int i = 0; i < NX_MAX_STREAM; i++)
 				mStream[i] = NULL;
 		}
 	virtual ~StreamManager() {
-		ALOGD("[%s] Delete", __func__);
+		ALOGDD("[%s] Delete", __func__);
 	}
 
+	int getPreviewStream(camera3_stream_configuration_t *stream_list);
 	int configureStreams(camera3_stream_configuration_t *stream_list);
 	int registerRequests(camera3_capture_request_t *r);
 	int stopStream();
-	sp<Stream> getStream(uint32_t type, camera3_stream_t *ph, int usage);
+	sp<Stream> getStream(uint32_t type);
 
 protected:
 	virtual status_t readyToRun();
@@ -67,15 +69,18 @@ private:
 			uint32_t type,
 			NXCamera3Buffer *buf);
 	void setCaptureResult(uint32_t type, NXCamera3Buffer *buf);
-	void drainBuffer();
-	int sendResult(bool drain = false);
+	int getRunningStreamsCount(void);
+	void drainBuffer(void);
+	int sendResult(void);
+	int allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_handle_t *p);
 	int jpegEncoding(private_handle_t *dst, private_handle_t *src,
 			exif_attribute_t *exif);
+	int scaling(private_handle_t *src, private_handle_t *dst,
+			const camera_metadata_t *request);
 	int copyBuffer(private_handle_t *dst, private_handle_t *src);
-	camera_metadata_t* translateMetadata(const camera_metadata_t *request,
-			exif_attribute_t *exif,
-			nsecs_t timestamp,
-			uint8_t pipeline_depth);
+	int runStreamThread(camera3_stream_t *s);
+	private_handle_t* getSimilarActiveStream(camera3_stream_buffer_t *out,
+			int num_buffers, camera3_stream_t *s);
 
 private:
 	int mFd[MAX_VIDEO_HANDLES];
@@ -88,9 +93,9 @@ private:
 	NXQueue<NXCamera3Buffer *> mRQ;
 	NXQueue<nx_camera_request_t *> mRequestQ;
 	buffer_handle_t mScaleBuf;
-	uint32_t mMode;
 	uint32_t mNumBuffers;
 	uint8_t mPipeLineDepth;
+	const camera_metadata_t *mMeta;
 	sp<Stream> mStream[NX_MAX_STREAM];
 
 }; /* StreamManager */

@@ -28,6 +28,8 @@
 #include <cutils/properties.h>
 #include <utils/Log.h>
 
+#include "GlobalDef.h"
+
 #define EXIF_LOG2(x)                    (log((double)(x)) / log(2.0))
 #define APEX_FNUM_TO_APERTURE(x)        (((EXIF_LOG2((double)(x)) * 200) + 0.5)/100)
 #define APEX_EXPOSURE_TO_SHUTTER(x)     ((x) >= 1 ?                                 \
@@ -309,16 +311,16 @@ struct exif_attribute_t {
     void setFixedAttribute() {
         char property[PROPERTY_VALUE_MAX];
 
-	ALOGD("[DEBUG] setFixedAttribute");
+	ALOGDV("setFixedAttribute");
 
         strncpy((char *)maker, EXIF_DEF_MAKER, sizeof(maker) - 1);
         maker[sizeof(maker) - 1] = '\0';
-	ALOGD("[DEBUG] maker:%s", maker);
+	ALOGDV("maker:%s", maker);
 
         property_get("ro.product.model", property, EXIF_DEF_MODEL);
         strncpy((char *)model, property, sizeof(model) - 1);
         model[sizeof(model) - 1] = '\0';
-	ALOGD("[DEBUG] model:%s", model);
+	ALOGDV("model:%s", model);
 
         strncpy((char *)software, EXIF_DEF_SOFTWARE, sizeof(software) - 1);
         software[sizeof(software) - 1] = '\0';

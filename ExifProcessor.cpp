@@ -11,6 +11,7 @@
 #include <libnxjpeg.h>
 #include <gralloc_priv.h>
 #include <nx-scaler.h>
+#include "GlobalDef.h"
 #include "ExifProcessor.h"
 
 using namespace android;
@@ -20,13 +21,13 @@ using namespace android;
 bool ExifProcessor::preprocessExif()
 {
 	// enableThumb
-	ALOGD("thumb width:%d, height:%d", Exif->widthThumb, Exif->heightThumb);
+	ALOGDV("[%s] thumb width:%d, height:%d", __func__, Exif->widthThumb, Exif->heightThumb);
 	if (Exif->widthThumb > 0 && Exif->heightThumb > 0) {
 		Exif->enableThumb = true;
 	} else {
 		Exif->enableThumb = false;
 	}
-	ALOGD("[DEBUG] enableThumb: %d", Exif->enableThumb);
+	ALOGDV("[%s] enableThumb: %d", __func__, Exif->enableThumb);
 
 	// width, height
 	Exif->width = Width;
@@ -58,7 +59,7 @@ bool ExifProcessor::preprocessExif()
 	// gps
 	if (Exif->gps_coordinates[0] != 0 && Exif->gps_coordinates[1] != 0) {
 		Exif->enableGps = true;
-		ALOGD("GPS Enabled");
+		ALOGDI("GPS Enabled");
 
 		if (Exif->gps_coordinates[0] > 0)
 		    strcpy((char *)Exif->gps_latitude_ref, "N");
@@ -109,7 +110,7 @@ bool ExifProcessor::preprocessExif()
 			"%04d:%02d:%02d", tm_data.tm_year + 1900, tm_data.tm_mon + 1, tm_data.tm_mday);
 	} else {
 		Exif->enableGps = false;
-		ALOGD("GPS Disabled");
+		ALOGDI("GPS Disabled");
 	}
 
 	return true;
@@ -250,7 +251,7 @@ bool ExifProcessor::scaleDown()
 	ctx.crop.y = Exif->cropY;
 	ctx.crop.width = Exif->cropWidth;
 	ctx.crop.height = Exif->cropHeight;
-	ALOGD("[CROP] crop x:%d, y:%d, width:%d, height:%d",
+	ALOGDI("[CROP] crop x:%d, y:%d, width:%d, height:%d",
 	      ctx.crop.x, ctx.crop.y, ctx.crop.width, ctx.crop.height);
 
 	ctx.src_plane_num = 1;
@@ -263,7 +264,7 @@ bool ExifProcessor::scaleDown()
 	ctx.src_stride[1] = src_c_stride;
 	ctx.src_stride[2] = src_c_stride;
 
-	ALOGD("src width:%d, height:%d, strides:%d:%d, size:%d",
+	ALOGDI("src width:%d, height:%d, strides:%d:%d, size:%d",
 		ctx.src_width, ctx.src_height, ctx.src_stride[0], ctx.src_stride[1], SrcHandle->size);
 
 	ctx.dst_plane_num = 1;
@@ -275,7 +276,7 @@ bool ExifProcessor::scaleDown()
 	ctx.dst_stride[0] = dst_y_stride;
 	ctx.dst_stride[1] = dst_c_stride;
 	ctx.dst_stride[2] = dst_c_stride;
-	ALOGD("dst width:%d, height:%d, strides:%d:%d, size:%d",
+	ALOGDI("dst width:%d, height:%d, strides:%d:%d, size:%d",
 		ctx.dst_width, ctx.dst_height, ctx.dst_stride[0], ctx.dst_stride[1], buf->size);
 
 	ret = nx_scaler_run(handle, &ctx);
@@ -340,7 +341,7 @@ bool ExifProcessor::encodeThumb()
 		return false;
 	}
 	ThumbnailJpegSize = jpegSize;
-	ALOGD("ThumbnailJpegSize %d", ThumbnailJpegSize);
+	ALOGDI("ThumbnailJpegSize %d", ThumbnailJpegSize);
 
 	ret = module->unlock(module, src);
 	if (ret) {
@@ -518,8 +519,8 @@ bool ExifProcessor::processExif()
 		memcpy(pIfdStart + LongerTagOffset, ThumbnailBuffer, ThumbnailJpegSize);
 		LongerTagOffset += ThumbnailJpegSize;
 		if (LongerTagOffset > EXIF_LIMIT_SIZE) {
-			ALOGD("[DEBUG] LongerTagOffset:%d is bigger than EXIF_LIMIT_SIZE:%d",
-				LongerTagOffset ,EXIF_LIMIT_SIZE);
+			ALOGDV("[%s] LongerTagOffset:%d is bigger than EXIF_LIMIT_SIZE:%d",
+				__func__, LongerTagOffset ,EXIF_LIMIT_SIZE);
 			LongerTagOffset = exifSizeExceptThumb;
 			tmp = 0;
 			memcpy(pNextIfdOffset, &tmp, OFFSET_SIZE);
@@ -529,7 +530,6 @@ bool ExifProcessor::processExif()
 		memcpy(pNextIfdOffset, &tmp, OFFSET_SIZE);
 	}
 
-	ALOGD("[ADDRESS] APP1 Marker pCur=%p, pApp1Start=%p", pCur, pApp1Start);
 	// APP1 Marker
 	memcpy(pApp1Start, exif_attribute_t::kApp1Marker, 2);
 	pApp1Start += 2;
@@ -543,7 +543,7 @@ bool ExifProcessor::processExif()
 
 	// calc OutSize
 	OutSize = 2 + 2 + 2 + 6 + LongerTagOffset; // SOI + APP1 Marker + APP1 Size + Exif Header + TIFF
-	ALOGD("[DEBUG] OutSize: %d, TIFF Size: %d", OutSize, LongerTagOffset);
+	ALOGDV("[%s] OutSize: %d, TIFF Size: %d", __func__, OutSize, LongerTagOffset);
 
 	return true;
 }
@@ -557,7 +557,7 @@ ExifProcessor::ExifResult ExifProcessor::makeExif()
 {
 	bool ret = true;
 
-	ALOGD("makeExif() entered");
+	ALOGDI("makeExif() entered");
 	ret = preprocessExif();
 	if (!ret) {
 		ALOGE("Failed to preprocessExif()!!!");
@@ -608,7 +608,7 @@ ExifProcessor::ExifResult ExifProcessor::makeExif()
 	freeThumbnailBuffer();
 	freeScaleBuffer();
 
-	ALOGD("makeExif() exit");
+	ALOGDI("makeExif() exit");
 	return ExifProcessor::ExifResult(OutBuffer, OutSize);
 }
 
