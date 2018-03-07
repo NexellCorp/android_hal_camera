@@ -81,7 +81,7 @@ static uint32_t getFrameInfo(int fd, struct v4l2_frame_interval *frames)
 		if (!ret) {
 			ALOGDI("[%d] width:%d, height:%d",
 			      r, frames[r].width, frames[r].height);
-			if (((frames[r].width % 32) == 0)) {
+			if ((frames[r].width % 32) == 0) {
 				for (int i = 0; i <= V4L2_INTERVAL_MAX; i++) {
 					ret = v4l2_get_frameinterval(fd,
 								     &frames[r],
@@ -126,7 +126,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 	/* TODO: get sensor orientation info from others
 	 * need scheme
 	 */
-	int32_t sensor_orientation = 0;
+	int32_t sensor_orientation = SENSOR_ORIENTATION;
 	staticInfo.update(ANDROID_SENSOR_ORIENTATION,
 			  &sensor_orientation, 1);
 

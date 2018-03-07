@@ -134,7 +134,7 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 {
 	int fd;
 
-	ALOGD("[%s] mCameraId:%d", __func__, mCameraId);
+	ALOGDD("[%s] mCameraId:%d", __func__, mCameraId);
 
 	if (mCameraId == 0)
 		fd = open(BACK_CAMERA_DEVICE, O_RDWR);
@@ -145,6 +145,7 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 				(mCameraId) ? "Front"  : "Back", fd);
 		return -ENODEV;
 	}
+	ALOGDD("Back Camera:%s\n", BACK_CAMERA_DEVICE);
 	mHandles[0] = fd;
 	if (MAX_VIDEO_HANDLES > 1) {
 		if (mCameraId == 0)
@@ -628,8 +629,7 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 	/* The values is not available in the other case */
 	/* TODO: set orientation by camera sensor
 	*/
-	if (info->facing != CAMERA_FACING_EXTERNAL)
-		info->orientation = 0;
+	info->orientation = SENSOR_ORIENTATION;
 	info->device_version = CAMERA_DEVICE_API_VERSION_3_4;
 	info->resource_cost = 100;
 	info->conflicting_devices = NULL;
