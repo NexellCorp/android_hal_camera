@@ -102,7 +102,8 @@ static uint32_t getFrameInfo(int fd, struct v4l2_frame_interval *frames)
 	return r;
 }
 
-const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
+const camera_metadata_t *initStaticMetadata(uint32_t facing,
+		uint32_t orientation, uint32_t fd)
 {
 	CameraMetadata staticInfo;
 	const camera_metadata_t *meta;
@@ -126,11 +127,11 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 	/* TODO: get sensor orientation info from others
 	 * need scheme
 	 */
-	int32_t sensor_orientation = SENSOR_ORIENTATION;
+	int32_t sensor_orientation = orientation;
 	staticInfo.update(ANDROID_SENSOR_ORIENTATION,
 			  &sensor_orientation, 1);
 
-	uint8_t lensFacing = (!camera_id) ?
+	uint8_t lensFacing = (!facing) ?
 		ANDROID_LENS_FACING_BACK : ANDROID_LENS_FACING_FRONT;
 	staticInfo.update(ANDROID_LENS_FACING, &lensFacing, 1);
 	float focal_lengths = 3.43f;
@@ -281,7 +282,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 			  available_af_modes,
 			  sizeof(available_af_modes)/sizeof(uint8_t));
 
-	int32_t max_latency = (!camera_id) ?
+	int32_t max_latency = (!facing) ?
 			ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL: MAX_SYNC_LATENCY;
 	staticInfo.update(ANDROID_SYNC_MAX_LATENCY,
 			  &max_latency, 1);
@@ -556,7 +557,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t camera_id, uint32_t fd)
 	uint8_t available_capabilities_count = 0;
 	available_capabilities[available_capabilities_count++] =
 		ANDROID_REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE;
-	if (camera_id)
+	if (facing)
 		available_capabilities[available_capabilities_count++] =
 			ANDROID_REQUEST_AVAILABLE_CAPABILITIES_RAW;
 

@@ -25,7 +25,92 @@
 
 namespace android {
 
-const camera_metadata_t *gStaticMetadata[NUM_OF_CAMERAS] = {0, };
+struct CameraInfo {
+	/* type - 0:back, 1:front */
+	bool	type;
+	char	dev_path[20];
+	char	subdev_path[20];
+	int	orientation;
+	const	camera_metadata_t *metadata;
+};
+
+static struct CameraInfo gCameraInfo[NUM_OF_CAMERAS] = {{0, {0, }, {0, }, 0, 0}, };
+/**
+ * Static Function
+ */
+static void makeCameraInfo(void)
+{
+	int video_num = 0, i = 0, j = 0;
+	char string[20] = {0, };
+	char *ptr = NULL;
+
+	ALOGDI("[%s] num of cameras:%d, back:%s, front:%s", __func__,
+			NUM_OF_CAMERAS, BACK_CAMERA_DEVICE, FRONT_CAMERA_DEVICE);
+
+	if (BACK_CAMERA_DEVICE)
+		strcpy(string, BACK_CAMERA_DEVICE);
+	ptr = strtok(string, ",");
+	for (; i < NUM_OF_CAMERAS; i++) {
+		if (ptr != NULL) {
+			video_num = atoi(ptr);
+			snprintf(gCameraInfo[i].dev_path, sizeof(gCameraInfo[i].dev_path),
+					"/dev/video%d", video_num);
+			snprintf(gCameraInfo[i].subdev_path, sizeof(gCameraInfo[i].subdev_path),
+					"/dev/video%d", video_num + NUM_OF_CAMERAS);
+			gCameraInfo[i].type = false;
+			ptr = strtok(NULL, ",");
+		} else
+			break;
+	}
+	if (BACK_CAMERA_ORIENTATION)
+		strcpy(string, BACK_CAMERA_ORIENTATION);
+	ptr = strtok(string, ",");
+	for (j = 0; j < i; j++) {
+		if (ptr != NULL) {
+			gCameraInfo[j].orientation = atoi(ptr);
+			ptr = strtok(NULL, ",");
+		} else {
+			gCameraInfo[j].orientation = 0;
+			break;
+		}
+	}
+
+	if (FRONT_CAMERA_DEVICE)
+		strcpy(string, FRONT_CAMERA_DEVICE);
+	ptr = strtok(string, ",");
+	for (; i < NUM_OF_CAMERAS; i++) {
+		if (ptr != NULL) {
+			video_num = atoi(ptr);
+			snprintf(gCameraInfo[i].dev_path, sizeof(gCameraInfo[i].dev_path),
+					"/dev/video%d", video_num);
+			snprintf(gCameraInfo[i].subdev_path, sizeof(gCameraInfo[i].subdev_path),
+					"/dev/video%d", video_num + NUM_OF_CAMERAS);
+			gCameraInfo[i].type = true;
+			ptr = strtok(NULL, ",");
+		} else
+			break;
+	}
+
+	if (FRONT_CAMERA_ORIENTATION)
+		strcpy(string, FRONT_CAMERA_ORIENTATION);
+	ptr = strtok(string, ",");
+	for (; j < i; j++) {
+		if (ptr != NULL) {
+			gCameraInfo[j].orientation = atoi(ptr);
+			ptr = strtok(NULL, ",");
+		} else {
+			gCameraInfo[j].orientation = 0;
+			break;
+		}
+	}
+	for (i = 0; i < NUM_OF_CAMERAS; i++) {
+		ALOGDI("[%s] %s device:%s, sub device:%s, orientation:%d ",
+				__func__,
+				(gCameraInfo[i].type) ? "front" : "back",
+				gCameraInfo[i].dev_path, gCameraInfo[i].subdev_path,
+				gCameraInfo[i].orientation);
+	}
+}
 
 /**
 * Camera3 callback ops
@@ -120,14 +205,14 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 	mCameraDevice.ops = &camera3Ops;
 	mCameraDevice.priv = this;
 
-	ALOGI("cameraId = %d", cameraId);
-	ALOGI("tag = %d", mCameraDevice.common.tag);
-	ALOGI("version = %d", mCameraDevice.common.version);
+	ALOGDI("cameraId = %d", cameraId);
+	ALOGDI("tag = %d", mCameraDevice.common.tag);
+	ALOGDI("version = %d", mCameraDevice.common.version);
 }
 
 Camera3HWInterface::~Camera3HWInterface(void)
 {
-	ALOGI("[%s] destroyed", __func__);
+	ALOGDI("[%s] destroyed", __func__);
 }
 
 int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
@@ -136,34 +221,26 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 
 	ALOGDD("[%s] mCameraId:%d", __func__, mCameraId);
 
-	if (mCameraId == 0)
-		fd = open(BACK_CAMERA_DEVICE, O_RDWR);
-	else
-		fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
+	fd = open(gCameraInfo[mCameraId].dev_path, O_RDWR);
 	if (fd < 0) {
 		ALOGE("Failed to open %s camera :%d",
-				(mCameraId) ? "Front"  : "Back", fd);
+				(gCameraInfo[mCameraId].type) ? "Front"  : "Back", fd);
 		return -ENODEV;
 	}
-	ALOGDD("Back Camera:%s\n", BACK_CAMERA_DEVICE);
 	mHandles[0] = fd;
 	if (MAX_VIDEO_HANDLES > 1) {
-		if (mCameraId == 0)
-			fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
-		else
-			fd = open(BACK_CAMERA_DEVICE, O_RDWR);
+		fd = open(gCameraInfo[mCameraId].subdev_path, O_RDWR);
 		if (fd < 0) {
 			ALOGE("Failed to open %s camera :%d",
-					(!mCameraId) ? "Front"  : "Back", fd);
+					(gCameraInfo[mCameraId].type) ? "Front"  : "Back", fd);
 			return -ENODEV;
 		}
-		mHandles[1] = fd;
+		mHandles[MAX_VIDEO_HANDLES - 1] = fd;
 	}
 
 	mCallbacks = callback;
 	for (int j = 0; j < CAMERA3_TEMPLATE_MANUAL; j++) {
 		mRequestMetadata[j] = NULL;
-		ALOGD("mRequestMetadata[%d] = %p\n", j, mRequestMetadata[j]);
 	}
 
 #ifdef CAMERA_USE_ZOOM
@@ -199,7 +276,7 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 		return -EINVAL;
 	}
 
-	ALOGD("[%s] operation_mode:%d, num_streams:%d", __func__,
+	ALOGDD("[%s] operation_mode:%d, num_streams:%d", __func__,
 			stream_list->operation_mode, stream_list->num_streams);
 	for (size_t i = 0; i < stream_list->num_streams; i++) {
 		camera3_stream_t *new_stream = stream_list->streams[i];
@@ -212,7 +289,7 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 
 		if ((new_stream->stream_type == CAMERA3_STREAM_OUTPUT) ||
 				(new_stream->stream_type == CAMERA3_STREAM_BIDIRECTIONAL)) {
-			ALOGD("[%zu] format:0x%x, width:%d, height:%d, max buffers:%d, usage:0x%x",
+			ALOGDD("[%zu] format:0x%x, width:%d, height:%d, max buffers:%d, usage:0x%x",
 					i, new_stream->format, new_stream->width, new_stream->height,
 					new_stream->max_buffers,
 					new_stream->usage);
@@ -223,21 +300,21 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 				new_stream->max_buffers = MAX_BUFFER_COUNT;
 			}
 		}
-		ALOGD("[%s] stream type = %d, max_buffer = %d, usage = 0x%x",
+		ALOGDD("[%s] stream type = %d, max_buffer = %d, usage = 0x%x",
 				__func__, new_stream->stream_type, new_stream->max_buffers,
 				new_stream->usage);
 	}
 
 	if (mStreamManager != NULL) {
-		ALOGD("==================================================");
+		ALOGDD("==================================================");
 		mStreamManager->stopStream();
-		// TODO: check destructor
+		mStreamManager.clear();
 		mStreamManager = NULL;
 	}
 
 	if (mStreamManager == NULL) {
-		ALOGD("new Stream");
-		ALOGD("==================================================");
+		ALOGDD("new Stream");
+		ALOGDD("==================================================");
 		mStreamManager = new StreamManager(mHandles, mScaler, mAllocator, mCallbacks);
 		if (mStreamManager == NULL) {
 			ALOGE("Failed to construct StreamManager for preview");
@@ -251,10 +328,10 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 const camera_metadata_t*
 Camera3HWInterface::constructDefaultRequestSettings(int type)
 {
-	ALOGD("[%s] type = %d", __func__, type);
+	ALOGDD("[%s] type = %d", __func__, type);
 
 	if (mRequestMetadata[type-1] != NULL) {
-		ALOGD("mRequestMetadata for %d is already exist", type);
+		ALOGDD("mRequestMetadata for %d is already exist", type);
 		return mRequestMetadata[type-1];
 	}
 
@@ -282,7 +359,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 
 	switch (type) {
 		case CAMERA3_TEMPLATE_PREVIEW:
-			ALOGD("[%s] CAMERA3_TEMPLATE_PREVIEW:%d", __func__, type);
+			ALOGDD("[%s] CAMERA3_TEMPLATE_PREVIEW:%d", __func__, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
 			antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
@@ -291,7 +368,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_STILL_CAPTURE:
-			ALOGD("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE:%d", __func__, type);
+			ALOGDD("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE:%d", __func__, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
@@ -299,7 +376,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_VIDEO_RECORD:
-			ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD:%d", __func__, type);
+			ALOGDD("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD:%d", __func__, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
@@ -307,7 +384,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
-			ALOGD("[%s] CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:%d", __func__, type);
+			ALOGDD("[%s] CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:%d", __func__, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
@@ -315,7 +392,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
-			ALOGD("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:%d", __func__, type);
+			ALOGDD("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:%d", __func__, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
@@ -323,7 +400,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_MANUAL:
-			ALOGD("[%s] CAMERA3_TEMPLATE_MANUAL:%d", __func__, type);
+			ALOGDD("[%s] CAMERA3_TEMPLATE_MANUAL:%d", __func__, type);
 			controlIntent =ANDROID_CONTROL_CAPTURE_INTENT_MANUAL;
 			//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
 			controlMode = ANDROID_CONTROL_MODE_OFF;
@@ -334,7 +411,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 			break;
 		default:
-			ALOGD("[%s] not supported", __func__);
+			ALOGDD("[%s] not supported", __func__);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_CUSTOM;
 			//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
 			controlMode = ANDROID_CONTROL_MODE_OFF;
@@ -398,8 +475,8 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	/*test pattern mode*/
 	int32_t testpatternMode = ANDROID_SENSOR_TEST_PATTERN_MODE_OFF;
 	metaData.update(ANDROID_SENSOR_TEST_PATTERN_MODE, &testpatternMode, 1);
-	if (gStaticMetadata[mCameraId] == NULL) {
-		ALOGD("gStaticMetadata for %d is not initialized", mCameraId);
+	if (gCameraInfo[mCameraId].metadata == NULL) {
+		ALOGDD("gStaticMetadata for %d is not initialized", mCameraId);
 		mRequestMetadata[type-1] = metaData.release();
 		return mRequestMetadata[type-1];
 	}
@@ -407,12 +484,12 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	/* metadata from static metadata */
 	CameraMetadata meta;
 
-	meta = gStaticMetadata[mCameraId];
+	meta = gCameraInfo[mCameraId].metadata;
 
 	float default_focal_length = 0;
 	if (meta.exists(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS))
 		default_focal_length = meta.find(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS).data.f[0];
-	ALOGD("ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS:%f", default_focal_length);
+	ALOGDD("ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS:%f", default_focal_length);
 	metaData.update(ANDROID_LENS_FOCAL_LENGTH, &default_focal_length, 1);
 
 	/* Fps range */
@@ -432,7 +509,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 				meta.find(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).data.i32[1];
 		}
 	}
-	ALOGD("available_fps_ranges min:%d, max:%d", available_fps_ranges[0], available_fps_ranges[1]);
+	ALOGDD("available_fps_ranges min:%d, max:%d", available_fps_ranges[0], available_fps_ranges[1]);
 	metaData.update(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, available_fps_ranges, 2);
 	/*scaler crop region*/
 	int32_t sizes[4] = {0, 0, 0, 0};
@@ -442,7 +519,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		sizes[2] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[2];
 		sizes[3] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[3];
 	}
-	ALOGD("ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE-%d:%d:%d:%d",
+	ALOGDD("ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE-%d:%d:%d:%d",
 			sizes[0], sizes[1], sizes[2], sizes[3]);
 	metaData.update(ANDROID_SCALER_CROP_REGION, sizes, 4);
 
@@ -451,7 +528,6 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	metaData.update(ANDROID_SENSOR_FRAME_DURATION, &default_frame_duration, 1);
 
 	mRequestMetadata[type-1] = metaData.release();
-
 	return mRequestMetadata[type-1];
 }
 
@@ -561,27 +637,35 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 
 int Camera3HWInterface::flush()
 {
-	ALOGD("[%s]", __func__);
+	ALOGDD("[%s]", __func__);
 	return 0;
 }
 
 int Camera3HWInterface::cameraDeviceClose()
 {
-	ALOGD("[%s]", __func__);
-	if ((mStreamManager != NULL) && (mStreamManager->isRunning()))
+	ALOGDD("[%s]", __func__);
+	if ((mStreamManager != NULL) && (mStreamManager->isRunning())) {
 		mStreamManager->stopStream();
-	if (mScaler >= 0)
+		mStreamManager.clear();
+		mStreamManager = NULL;
+	}
+	if (mScaler >= 0) {
 		nx_scaler_close(mScaler);
-	if (mAllocator)
+		mScaler = -1;
+	}
+	if (mAllocator) {
 		mAllocator->common.close((struct hw_device_t *)mAllocator);
-
-
-	for (int i = 0; i < MAX_VIDEO_HANDLES; i++) {
-		if (mHandles[i] > 0)
-			close(mHandles[i]);
-		mHandles[i] = -1;
+		mAllocator = NULL;
 	}
 
+	for (int i = 0; i < MAX_VIDEO_HANDLES; i++) {
+		if (mHandles[i] >= 0)
+			close(mHandles[i]);
+		mHandles[i] = -1;
+		gCameraInfo[mCameraId].metadata = NULL;
+	}
+	for (int i = 0; i < CAMERA3_TEMPLATE_MANUAL; i++)
+		mRequestMetadata[i] = NULL;
 	return 0;
 }
 
@@ -590,16 +674,6 @@ int Camera3HWInterface::cameraDeviceClose()
 */
 static int getNumberOfCameras(void)
 {
-	/*
-	* only count built in camera BACK + FRONT
-	* external camera will be notified
-	* by camera_device_status_change callback
-	*/
-	/*
-	* TODO: need to implement a case when we support cameras more than 1
-	* Currently only support one camera
-	*/
-	ALOGI("[%s] num of cameras:%d", __func__, NUM_OF_CAMERAS);
 	return NUM_OF_CAMERAS;
 }
 
@@ -608,42 +682,41 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 	int ret = 0;
 	int fd;
 
-	ALOGD("[%s] cameraID:%d", __func__, camera_id);
+	ALOGDD("[%s] cameraID:%d", __func__, camera_id);
 
 	if (camera_id >= NUM_OF_CAMERAS || !info || (camera_id < 0))
 		return -ENODEV;
 
-	if (camera_id == 0)
-		fd = open(BACK_CAMERA_DEVICE, O_RDWR);
-	else
-		fd = open(FRONT_CAMERA_DEVICE, O_RDWR);
+	if (gCameraInfo[camera_id].dev_path[0] == '\0')
+		makeCameraInfo();
+
+	fd = open(gCameraInfo[camera_id].dev_path, O_RDWR);
 	if (fd < 0) {
 		ALOGE("Failed to open %s camera :%d",
-				(camera_id) ? "Front"  : "Back", fd);
+				(gCameraInfo[camera_id].type) ? "Front"  : "Back", fd);
 		return -ENODEV;
 	}
 
 	/* 0 = BACK, 1 = FRONT */
-	info->facing = camera_id ? CAMERA_FACING_FRONT : CAMERA_FACING_BACK;
-
-	/* The values is not available in the other case */
-	/* TODO: set orientation by camera sensor
-	*/
-	info->orientation = SENSOR_ORIENTATION;
+	info->facing = (gCameraInfo[camera_id].type) ? CAMERA_FACING_FRONT : CAMERA_FACING_BACK;
+	info->orientation = gCameraInfo[camera_id].orientation;
 	info->device_version = CAMERA_DEVICE_API_VERSION_3_4;
 	info->resource_cost = 100;
 	info->conflicting_devices = NULL;
 	info->conflicting_devices_length = 0;
 
-	if (gStaticMetadata[camera_id] == NULL)
-		gStaticMetadata[camera_id] = initStaticMetadata(camera_id, fd);
-	info->static_camera_characteristics = gStaticMetadata[camera_id];
+	if (gCameraInfo[camera_id].metadata == NULL)
+		gCameraInfo[camera_id].metadata = initStaticMetadata(info->facing,
+								info->orientation, fd);
+	info->static_camera_characteristics = gCameraInfo[camera_id].metadata;
 
-	ALOGI("======camera info =====\n");
-	ALOGI("camera facing = %s\n", info->facing ? "Front" : "Back");
-	ALOGI("device version = %d\n", info->device_version);
-	ALOGI("resource cost = %d\n", info->resource_cost);
-	ALOGI("conflicting devices is %s\n", info->conflicting_devices ? "exist"
+	ALOGDD("======camera info =====:%s-%s", gCameraInfo[camera_id].dev_path,
+			gCameraInfo[camera_id].subdev_path);
+	ALOGDI("camera facing = %s", info->facing ? "Front" : "Back");
+	ALOGDI("device version = %d", info->device_version);
+	ALOGDI("resource cost = %d", info->resource_cost);
+	ALOGDD("orientation = %d", info->orientation);
+	ALOGDI("conflicting devices is %s", info->conflicting_devices ? "exist"
 			: "not exist");
 
 	close(fd);
@@ -662,7 +735,7 @@ static int cameraOpen(const struct hw_module_t *,
 {
 	int camera_id = 0;
 
-	ALOGD("[%s]", __func__);
+	ALOGDD("[%s]", __func__);
 
 	camera_id = atoi(id);
 	if ((camera_id < 0 ) || (camera_id >= getNumberOfCameras()))
