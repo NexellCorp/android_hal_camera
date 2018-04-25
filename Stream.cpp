@@ -496,9 +496,9 @@ bool Stream::isThisStream(camera3_stream_t *b)
 {
 	ALOGDV("[%s:%d] Stream format:0x%x, width:%d, height:%d, usage:0x%x",
 			__func__, mType, mStream->format, mStream->width, mStream->height, mStream->usage);
-	if (b->format == (int)mStream->format) {
-		if ((b->width == (int)mStream->width) &&
-				(b->height == (int)mStream->height)
+	if (b->format == mStream->format) {
+		if ((b->width == mStream->width) &&
+				(b->height == mStream->height)
 				&& (b->usage == mStream->usage))
 			return true;
 	}
@@ -507,7 +507,7 @@ bool Stream::isThisStream(camera3_stream_t *b)
 #if 0
 int testCount = 0;
 #endif
-int Stream::sendResult(bool drain)
+int Stream::sendResult(void)
 {
 	int ret = NO_ERROR;
 #if 0
@@ -559,7 +559,7 @@ void Stream::drainBuffer()
 		mRQ.queue(mQ.dequeue());
 
 	while (!mRQ.isEmpty())
-		sendResult(true);
+		sendResult();
 
 	ALOGDV("[%d] end draining", mType);
 }

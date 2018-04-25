@@ -177,7 +177,7 @@ private:
 	NXCamera3Buffer mBuffers[MAX_BUFFER_COUNT+2];
 
 	int setBufferFormat(private_handle_t *h);
-	int sendResult(bool drain = false);
+	int sendResult();
 	void stopV4l2();
 	void drainBuffer();
 

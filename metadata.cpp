@@ -232,9 +232,10 @@ const camera_metadata_t *initStaticMetadata(uint32_t facing,
          /*
 	  *For CTS: android.hardware.camera2.cts.CaptureRequestTest#testFlashControl
           */
+	int64_t exposureTimeRange[] = {-4, 4};
 	staticInfo.update(ANDROID_SENSOR_INFO_EXPOSURE_TIME_RANGE,
-			  exposureCompensationRange,
-			  sizeof(exposureCompensationRange)/sizeof(int32_t));
+			  exposureTimeRange,
+			  sizeof(exposureTimeRange)/sizeof(int64_t));
 	/* For CTS : android.hardware.camera2.cts.CaptureRequestTest#testAeModeAndLock */
 	uint8_t avail_ae_modes[] = {
 		ANDROID_CONTROL_AE_MODE_OFF,
