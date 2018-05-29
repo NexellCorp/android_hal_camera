@@ -48,7 +48,6 @@ int Stream::allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_handle_t
 		return -ENOMEM;
 	}
 	*p = ph;
-
 	return ret;
 }
 
@@ -68,10 +67,13 @@ bool Stream::calScalingFactor(const camera_metadata_t *request, uint32_t *crop)
 		cropHeight = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[3];
 		ALOGDV("CROP: left:%d, top:%d, width:%d, height:%d",
 			   cropX, cropY, cropWidth, cropHeight);
-	} else
+	} else {
+		meta.clear();
 		return scaling;
+	}
+	meta.clear();
 
-	getActiveArraySize(&active_width, &active_height);
+	getActiveArraySize(mCameraId, &active_width, &active_height);
 	if (active_width == 0 || active_height == 0)
 		return scaling;
 
@@ -98,39 +100,42 @@ bool Stream::calScalingFactor(const camera_metadata_t *request, uint32_t *crop)
 		crop[3] = calH;
 		scaling = true;
 	}
-
 	return scaling;
 }
 
-int Stream::scaling(private_handle_t *srcBuf, const camera_metadata_t *request)
+int Stream::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
+		const camera_metadata_t *request)
 {
 	uint32_t crop[4] = {0,};
-	bool scaling = true;
+	bool scaling = false;
 
-	if ((mScaler < 0) || (!mScaleBuf)) {
-		ALOGE("scaler fd or buf is invalid");
+	if ((mScaler < 0) || (!dstBuf) || (!srcBuf)) {
+		ALOGE("scaler fd:%d or buf(src-%p:dst-%p) is invalid",
+				mScaler, srcBuf, dstBuf);
 		return -ENODEV;
 	}
-	scaling = calScalingFactor(request, crop);
 
-	ALOGDD("[%s] %s", __func__, (scaling) ? "scaling" : "copy");
+#ifdef CAMERA_USE_ZOOM
+	scaling = calScalingFactor(request, crop);
+#else
+	(void)(request);
+#endif
+
+	ALOGDD("[%s:%d] %s", __func__, mType, (scaling) ? "scaling" : "copy");
 	if (!scaling) {
-		return 0;
 		crop[0] = 0;
 		crop[1] = 0;
 		crop[2] = srcBuf->width;
 		crop[3] = srcBuf->height;
 	}
-	ALOGDD("[%s] scaling[%d:%d:%d:%d]", __func__, crop[0], crop[1], crop[2], crop[3]);
+	ALOGDD("[%s:%d] scaling[%d:%d:%d:%d]", __func__, mType, crop[0], crop[1], crop[2], crop[3]);
 
 	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = getModule();
 	android_ycbcr src, dst;
-	private_handle_t *dstBuf = NULL;
 	struct nx_scaler_context ctx;
 	int ret = 0;
 
-	dstBuf = (private_handle_t*)mScaleBuf;
 	ret = module->lock_ycbcr(module, srcBuf, PROT_READ | PROT_WRITE, 0, 9,
 				 srcBuf->width, srcBuf->height, &src);
 	if (ret) {
@@ -179,7 +184,6 @@ int Stream::scaling(private_handle_t *srcBuf, const camera_metadata_t *request)
 		ALOGE("[%s] Failed to scaler set & run ioctl", __func__);
 		goto unlock;
 	}
-	memcpy(src.y, dst.y, srcBuf->size);
 unlock:
 	if (module ) {
 		ret = module->unlock(module, srcBuf);
@@ -193,7 +197,7 @@ unlock:
 	}
 
 exit:
-	ALOGDV("[%s:%d] scaling done", __func__,mType);
+	ALOGDD("[%s:%d] scaling done", __func__, mType);
 	return ret;
 }
 
@@ -302,6 +306,7 @@ int Stream::skipFrames(void)
 	private_handle_t *p;
 	size_t bufferCount = 0, i = 0;
 	int ret = NO_ERROR, dma_fd = 0, dqIndex = 0, fd = 0;
+	private_handle_t *ph;
 
 	if (!NUM_OF_SKIP_FRAMES)
 		return ret;
@@ -320,13 +325,20 @@ int Stream::skipFrames(void)
 		return -EINVAL;
 	}
 
-	private_handle_t *ph = buf->getPrivateHandle();
+#ifdef CAMERA_USE_ZOOM
+	ph = buf->getZoomPrivateHandle();
+#else
+	if (mScaling)
+		ph = buf->getZoomPrivateHandle();
+	else
+		ph = buf->getPrivateHandle();
+#endif
 	ret = setBufferFormat(ph);
 	if (ret) {
 		ALOGE("Failed to setBufferFormat:%d, mFd:%d", ret, mFd);
 		goto drain;
 	}
-#if 1
+
 	mMaxBufIndex = NUM_OF_SKIP_FRAMES + bufferCount;
 	ret = v4l2_req_buf(mFd, mMaxBufIndex);
 	if (ret) {
@@ -349,6 +361,33 @@ int Stream::skipFrames(void)
 		}
 	}
 
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+#ifdef CAMERA_SUPPORT_SCALING
+	if (mScaling)
+#endif
+	{
+		int w = ph->width;
+		int h = ph->height;
+
+#ifndef CAMERA_USE_ZOOM
+		getAvaliableResolution(mCameraId, &w, &h);
+		if ((w == ph->width) && (h == ph->height)) {
+			ALOGE("[%s:%d] Failed to get avaliable stream size",
+					__func__, mType);
+			return -EINVAL;
+		}
+#endif
+		for (i = 1; i < MAX_BUFFER_COUNT; i++) {
+			allocBuffer(w, h, ph->format, &mZmBuf[i]);
+			if (mZmBuf[i] == NULL) {
+				ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
+						mType);
+				goto fail;
+			}
+		}
+	}
+#endif
+
 
 	for (i = 0; i < bufferCount; i++) {
 		buf = mQ.dequeue();
@@ -358,7 +397,14 @@ int Stream::skipFrames(void)
 			ret = -EINVAL;
 			goto fail;
 		}
+#ifdef CAMERA_USE_ZOOM
+		dma_fd = buf->getZoomDmaFd();
+#else
+	if (mScaling)
+		dma_fd = buf->getZoomDmaFd();
+	else
 		dma_fd = buf->getDmaFd();
+#endif
 		ret = v4l2_qbuf(mFd, NUM_OF_SKIP_FRAMES+i, &dma_fd, 1, &mSize);
 		if (ret) {
 			ALOGE("[%d] Failed to v4l2_qbuf for preview(index:%zu), ret:%d",
@@ -388,84 +434,6 @@ int Stream::skipFrames(void)
 		if ((mAllocator) && (frames[i]))
 			mAllocator->free(mAllocator, frames[i]);
 	}
-#else
-	mMaxBufIndex = 10;
-	ret = v4l2_req_buf(mFd, mMaxBufIndex);
-	if (ret) {
-		ALOGE("Failed to req buf : %d, mFd:%d", ret, mFd);
-		goto drain;
-	}
-
-	for (i = 0; i < 10; i++) {
-		ret = allocBuffer(ph->width, ph->height, ph->format, &frames[i]);
-		if (ret) {
-			goto free;
-		}
-		p = (private_handle_t *)frames[i];
-		dma_fd = p->share_fd;
-		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
-		if (ret) {
-			ALOGE("[%d] Failed to v4l2_qbuf (index:%zu), ret:%d",
-					mType, i, ret);
-			goto fail;
-		}
-	}
-	ret = v4l2_streamon(mFd);
-	if (ret) {
-		ALOGE("Failed to stream on:%d", ret);
-		goto fail;
-	}
-	for (i = 0; i < 10; i++) {
-		ret = v4l2_dqbuf(mFd, &dqIndex, &fd, 1);
-		if (ret) {
-			ALOGE("Failed to dqbuf for preview:%d", ret);
-			goto stop;
-		}
-		ALOGDV("[%d] dqIndex %d", mType, dqIndex);
-	}
-	for (i = 0; i < 10; i++) {
-		p = (private_handle_t *)frames[dqIndex];
-		dma_fd = p->share_fd;
-		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
-		if (ret) {
-			ALOGE("[%d] Failed to v4l2_qbuf (index:%zu), ret:%d",
-					mType, i, ret);
-			goto fail;
-		}
-	}
-	for (i = 0; i < 10; i++) {
-		ret = v4l2_dqbuf(mFd, &dqIndex, &fd, 1);
-		if (ret) {
-			ALOGE("Failed to dqbuf for preview:%d", ret);
-			goto stop;
-		}
-		ALOGDV("[%d] dqIndex %d", mType, dqIndex);
-	}
-	for (i = 0; i < bufferCount; i++) {
-		buf = mQ.dequeue();
-		ALOGDV("[%d] mQ.dequeue: %p", mType, buf);
-		if (!buf) {
-			ALOGE("Fail - FATAL ERROR: Check Q!!");
-			ret = -EINVAL;
-			goto fail;
-		}
-		dma_fd = buf->getDmaFd();
-		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
-		if (ret) {
-			ALOGE("[%d] Failed to v4l2_qbuf for preview(index:%zu), ret:%d",
-					mType, i, ret);
-			goto fail;
-		}
-		mRQ.queue(buf);
-		ALOGDV("[%d] mRQ.queue: %p", mType, buf);
-	}
-	setQIndex(bufferCount);
-
-	for (i = 0; i < 10; i++) {
-		if ((mAllocator) && (frames[i]))
-			mAllocator->free(mAllocator, frames[i]);
-	}
-#endif
 	return NO_ERROR;
 
 stop:
@@ -485,6 +453,13 @@ free:
 		if ((mAllocator) && (frames[i]))
 			mAllocator->free(mAllocator, frames[i]);
 	}
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+	for (i = 0; i < MAX_BUFFER_COUNT; i++) {
+		if ((mAllocator) && (mZmBuf[i]))
+			mAllocator->free(mAllocator, (buffer_handle_t)mZmBuf[i]);
+		mZmBuf[i] = NULL;
+	}
+#endif
 
 drain:
 	ALOGE("[%s] Failed to set buffer format:%d", __func__, ret);
@@ -523,20 +498,25 @@ int Stream::sendResult(void)
 		ALOGE("[%s] failed to get buffer", __func__);
 		return -EINVAL;
 	}
-#ifdef CAMERA_USE_ZOOM
-	if (!mSkip && mScaleBuf) {
+	ALOGDV("[%s:%d]frame_number:%d", __func__, mType, buf->getFrameNumber());
+
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+	if (!mSkip) {
 		private_handle_t *ph;
 		if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf))
 			ph = (private_handle_t *)mTmpBuf;
 		else
 			ph = buf->getPrivateHandle();
-		scaling(ph, buf->getMetadata());
+#ifdef CAMERA_SUPPORT_SCALING
+		if (mScaling)
+#endif
+			scaling(ph, buf->getZoomPrivateHandle(), buf->getMetadata());
 	}
 #endif
 	if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf)) {
 		exif_attribute_t *exif = new exif_attribute_t();
 		uint32_t crop[4] = {0, };
-		translateMetadata(buf->getMetadata(), exif, 0, 0);
+		translateMetadata(mCameraId, buf->getMetadata(), exif, 0, 0);
 		if (calScalingFactor(buf->getMetadata(), crop))
 			exif->setCropResolution(crop[0], crop[1], crop[2], crop[3]);
 		else
@@ -546,6 +526,7 @@ int Stream::sendResult(void)
 	mCb->capture_result(mCb, mType, buf);
 	buf = mRQ.dequeue();
 	mFQ.queue(buf);
+	ALOGDV("[%s:%d] Exit", __func__, mType);
 	return ret;
 }
 
@@ -594,9 +575,14 @@ void Stream::stopStreaming()
 	if ((mAllocator) && (mTmpBuf))
 		mAllocator->free(mAllocator, (buffer_handle_t)mTmpBuf);
 	mTmpBuf = NULL;
-	if ((mAllocator) && (mScaleBuf))
-		mAllocator->free(mAllocator, (buffer_handle_t)mScaleBuf);
-	mScaleBuf = NULL;
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+	for (int i = 0; i < MAX_BUFFER_COUNT; i++) {
+		if ((mAllocator) && (mZmBuf[i]))
+			mAllocator->free(mAllocator, (buffer_handle_t)mZmBuf[i]);
+		mZmBuf[i] = NULL;
+	
+	}
+#endif
 	ALOGDD("[%s:%d] Exit", __func__, mType);
 
 	if (isRunning()) {
@@ -670,8 +656,43 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 		ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
 		return -ENOMEM;
 	}
+	private_handle_t *b = (private_handle_t*)*buf->buffer;
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+#ifdef CAMERA_SUPPORT_SCALING
+	if (!mScaling)
+		buffer->init(fNum, buf->stream, buf->buffer, meta);
+	else
+#endif
+	{
+		if (mZmBuf[0] == NULL) {
+			int width = b->width, height = b->height;
+#ifndef CAMERA_USE_ZOOM
+			getAvaliableResolution(mCameraId, &width, &height);
+			if ((width == b->width) && (height == b->height)) {
+				ALOGE("[%s:%d] Failed to get avaliable stream size",
+						__func__, mType);
+				return -EINVAL;
+			}
+#endif
+			allocBuffer(width, height, b->format, &mZmBuf[0]);
+			if (mZmBuf[0] == NULL) {
+				ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
+						mType);
+				return -ENOMEM;
+			}
+		}
+		uint32_t count = getQIndex();
+		if (!mZmBuf[count])
+			ALOGE("[%s:%d] mZmBuf[%d]:%p is invalid\n", __func__,
+					mType, count, mZmBuf[count]);
+		private_handle_t *z = (private_handle_t*)mZmBuf[count];
+		ALOGDD("[%s:%d] format:0x%x, width:%d, height:%d size:%d",
+				__func__, mType, z->format, z->width, z->height, z->size);
+		buffer->init(fNum, buf->stream, buf->buffer, mZmBuf[count], meta);
+	}
+#else
 	buffer->init(fNum, buf->stream, buf->buffer, meta);
-	private_handle_t *b = buffer->getPrivateHandle();
+#endif
 	ALOGDI("[%s:%d] format:0x%x, width:%d, height:%d size:%d",
 			__func__, mType, b->format, b->width, b->height, b->size);
 	mQ.queue(buffer);
@@ -685,9 +706,8 @@ status_t Stream::prepareForRun()
 	int ret = NO_ERROR, dma_fd = 0;
 	private_handle_t *ph = NULL;
 	buffer_handle_t buffer;
-	int format, width, height, buf_count = 0;
-
-
+	int width, height, format, buf_count = 0;
+	
 	ALOGDV("[%s:%d]", __func__, mType);
 
 	if ((NUM_OF_SKIP_FRAMES) && (!mSkip))
@@ -732,16 +752,33 @@ status_t Stream::prepareForRun()
 		}
 		mTmpBuf = buffer;
 	}
-	format = ph->format;
-	width = ph->width;
-	height = ph->height;
-	allocBuffer(width, height, format, &buffer);
-	if (buffer == NULL) {
-		ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
-				mType);
-		goto drain;
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+#ifdef CAMERA_SUPPORT_SCALING
+	if (mScaling)
+#endif
+	{
+		width = ph->width;
+		height = ph->height;
+
+#ifndef CAMERA_USE_ZOOM
+		getAvaliableResolution(mCameraId, &width, &height);
+		if ((width == ph->width) && (height == ph->height)) {
+			ALOGE("[%s:%d] Failed to get avaliable stream size",
+					__func__, mType);
+			return -EINVAL;
+		}
+#endif
+		for (i = 1; i < MAX_BUFFER_COUNT; i++) {
+			allocBuffer(width, height, format, &mZmBuf[i]);
+			if (mZmBuf[i] == NULL) {
+				ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
+						mType);
+				goto fail;
+			}
+		}
+		ph = buf->getZoomPrivateHandle();
 	}
-	mScaleBuf = buffer;
+#endif
 	if (ph->format == HAL_PIXEL_FORMAT_BLOB)
 		ret = setBufferFormat((private_handle_t*)mTmpBuf);
 	else
@@ -772,8 +809,16 @@ status_t Stream::prepareForRun()
 		if (ph->format == HAL_PIXEL_FORMAT_BLOB) {
 			ph = (private_handle_t *)mTmpBuf;
 			dma_fd = ph->share_fd;
-		} else
+		} else {
+#ifdef CAMERA_USE_ZOOM
+		dma_fd = buf->getZoomDmaFd();
+#else
+		if (mScaling)
+			dma_fd = buf->getZoomDmaFd();
+		else
 			dma_fd = buf->getDmaFd();
+#endif
+		}
 		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
 		if (ret) {
 			ALOGE("[%d] Failed to v4l2_qbuf for preview(index:%zu), ret:%d",
@@ -798,6 +843,14 @@ fail:
 	if (ret)
 		ALOGE("Failed to req buf(line:%d):%d, mFd:%d", __LINE__, ret, mFd);
 drain:
+
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+	for (i = 0; i < MAX_BUFFER_COUNT; i++) {
+		if ((mAllocator) && (mZmBuf[i]))
+			mAllocator->free(mAllocator, (buffer_handle_t)mZmBuf[i]);
+		mZmBuf[i] = NULL;
+	}
+#endif
 	ALOGE("[%s:%d] drain - Failed to set buffer format:%d", __func__, mType, ret);
 	drainBuffer();
 	return ret;
@@ -832,7 +885,14 @@ int Stream::qBuf(NXCamera3Buffer *buf)
 		private_handle_t *ph = (private_handle_t *)mTmpBuf;
 		dma_fd = ph->share_fd;
 	} else
-		dma_fd = buf->getDmaFd();
+#ifdef CAMERA_USE_ZOOM
+		dma_fd = buf->getZoomDmaFd();
+#else
+		if (mScaling)
+			dma_fd = buf->getZoomDmaFd();
+		else
+			dma_fd = buf->getDmaFd();
+#endif
 	ret = v4l2_qbuf(mFd, mQIndex, &dma_fd, 1, &mSize);
 	if (ret) {
 		ALOGE("Failed to qbuf index:%d, mFd:%d, ret:%d",

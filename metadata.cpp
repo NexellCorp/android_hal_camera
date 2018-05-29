@@ -11,15 +11,59 @@
 
 namespace android {
 
-#define MAX_SUPPORTED_RESOLUTION 64
 #define MAX_SYNC_LATENCY 4
+#define MAX_SUPPORTED_RESOLUTION 64
 
-int32_t pixel_array_size[2] = {0, 0};
+int32_t pixel_array_size[NUM_OF_CAMERAS][2] = {{0, 0}, };
 
-void getActiveArraySize(uint32_t *width, uint32_t *height)
+#ifdef CAMERA_SUPPORT_SCALING
+struct v4l2_frame_interval supported_lists[5] = {
+	{0, 176, 144, {15, 30}},/*QCIF*/
+	{1, 320, 240, {15, 30}},/*QVGA*/
+	{2, 352, 288, {15, 30}},/*CIF*/
+	{3, 800, 600, {15, 30}},/*VGA*/
+	{4, 1280, 720, {15, 30}},/*HD*/
+};
+#endif
+
+struct v4l2_frame_interval sensor_supported_lists[NUM_OF_CAMERAS][MAX_SUPPORTED_RESOLUTION] =
+{{{0, 0, 0, {0, 0}}, }, };
+
+bool isSupportedResolution(uint32_t id, int width, int height)
 {
-	*width = pixel_array_size[0];
-	*height = pixel_array_size[1];
+	bool ret = false;
+
+	for (int i = 0; i < MAX_SUPPORTED_RESOLUTION; i ++) {
+		if ((width == sensor_supported_lists[id][i].width) &&
+				(height == sensor_supported_lists[id][i].height)) {
+			ret = true;
+			break;
+		} else if (sensor_supported_lists[id][i].width == 0)
+			break;
+	}
+	return ret;
+}
+
+void getAvaliableResolution(uint32_t id, int *width, int *height)
+{
+	int w = *width;
+	int h = *height;
+
+	for (int i = 0; i < MAX_SUPPORTED_RESOLUTION; i ++) {
+		if ((w * h) < (sensor_supported_lists[id][i].width *
+				sensor_supported_lists[id][i].height)) {
+			*width = sensor_supported_lists[id][i].width;
+			*height = sensor_supported_lists[id][i].height;
+			break;
+		} else if (sensor_supported_lists[id][i].width == 0)
+			break;
+	}
+}
+
+void getActiveArraySize(uint32_t id, uint32_t *width, uint32_t *height)
+{
+	*width = pixel_array_size[id][0];
+	*height = pixel_array_size[id][1];
 }
 
 static int32_t checkMinFps(uint32_t count, struct v4l2_frame_interval *f)
@@ -63,8 +107,9 @@ static int32_t checkMaxJpegSize(uint32_t count, struct v4l2_frame_interval *f)
 		return max;
 
 	for (i = 1; i < count; i++) {
-		if ((f[i].width * f[i].height) > (f[i-1].width * f[i-1].height))
+		if ((f[i].width * f[i].height) > (f[i-1].width * f[i-1].height)) {
 			max = (f[i].width * f[i].height)*3;
+		}
 	}
 	return max;
 }
@@ -102,11 +147,10 @@ static uint32_t getFrameInfo(int fd, struct v4l2_frame_interval *frames)
 	return r;
 }
 
-const camera_metadata_t *initStaticMetadata(uint32_t facing,
+camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 		uint32_t orientation, uint32_t fd)
 {
 	CameraMetadata staticInfo;
-	const camera_metadata_t *meta;
 
 	/* android.info: hardware level */
 	uint8_t supportedHardwareLevel =
@@ -170,8 +214,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t facing,
 	staticInfo.update(ANDROID_SENSOR_INFO_PHYSICAL_SIZE,
 			  physical_size, 2);
 
-	struct v4l2_frame_interval frames[MAX_SUPPORTED_RESOLUTION];
-	int r = getFrameInfo(fd, frames);
+	int r = getFrameInfo(fd, sensor_supported_lists[id]);
 	ALOGDI("[%s] supported resolutions count:%d", __func__, r);
 	if (!r) {
 		ALOGE("sensor resolution value is invalid");
@@ -180,19 +223,19 @@ const camera_metadata_t *initStaticMetadata(uint32_t facing,
 	/* pixel size for preview and still capture
 	 * ACTIVE_ARRAY_SIZE should be similar with MAX_JPEG_SIZE
 	 * */
-	pixel_array_size[0] = frames[r-1].width;
-	pixel_array_size[1] = frames[r-1].height;
+	pixel_array_size[id][0] = sensor_supported_lists[id][r-1].width;
+	pixel_array_size[id][1] = sensor_supported_lists[id][r-1].height;
 	staticInfo.update(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
-			  pixel_array_size, 2);
+			  pixel_array_size[id], 2);
 	int32_t active_array_size[] = {
 		0/*left*/, 0/*top*/,
-		pixel_array_size[0]/*width*/,
-		pixel_array_size[1]/*height*/
+		pixel_array_size[id][0]/*width*/,
+		pixel_array_size[id][1]/*height*/
 	};
 	staticInfo.update(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE,
 			  active_array_size, 4);
-	int32_t max_fps = checkMaxFps(r, frames);
-	int32_t min_fps = checkMinFps(r, frames);
+	int32_t max_fps = checkMaxFps(r, sensor_supported_lists[id]);
+	int32_t min_fps = checkMinFps(r, sensor_supported_lists[id]);
 	/* For a device supports Limited Level
 	 * available_fps_ranges is {min_fps, max_fps, max_fps, max_fps}
 	 * min_fps <= 15 and max_fps = max frame rate
@@ -300,41 +343,75 @@ const camera_metadata_t *initStaticMetadata(uint32_t facing,
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_FORMATS,
 			  scaler_formats, fmt_count);
 
+	/* To support multi resolutions that the sensor don't support */
+	int i, j = 0, count = 0;
+#ifdef CAMERA_SUPPORT_SCALING
+	int list_size = sizeof(supported_lists)/sizeof(struct v4l2_frame_interval);
+#else
+	int list_size = 0;
+#endif
+	struct v4l2_frame_interval lists[MAX_SUPPORTED_RESOLUTION];
+	for (i = 0; i < r; i++) {
+#ifdef CAMERA_SUPPORT_SCALING
+		for (; j < list_size; j++) {
+			if ((supported_lists[j].width == sensor_supported_lists[id][i].width) &&
+					(supported_lists[j].height == sensor_supported_lists[id][i].height)) {
+				lists[count].index = count;
+				lists[count].width = supported_lists[j].width;
+				lists[count].height = supported_lists[j].height;
+				lists[count].interval[0] = supported_lists[j].interval[0];
+				lists[count].interval[1] = supported_lists[j].interval[1];
+				j++;
+				count++;
+				break;
+			} else if ((supported_lists[j].width * supported_lists[j].height) > 
+					(sensor_supported_lists[id][i].width * sensor_supported_lists[id][i].height)) {
+				lists[count].index = count;
+				lists[count].width = sensor_supported_lists[id][i].width;
+				lists[count].height = sensor_supported_lists[id][i].height;
+				lists[count].interval[0] = sensor_supported_lists[id][i].interval[0];
+				lists[count].interval[1] = sensor_supported_lists[id][i].interval[1];
+				count++;
+				break;
+			} else if ((supported_lists[j].width * supported_lists[j].height) < 
+					(sensor_supported_lists[id][i].width * sensor_supported_lists[id][i].height)) {
+				lists[count].index = count;
+				lists[count].width = supported_lists[j].width;
+				lists[count].height = supported_lists[j].height;
+				lists[count].interval[0] = supported_lists[j].interval[0];
+				lists[count].interval[1] = supported_lists[j].interval[1];
+				count++;
+			}
+		}
+#endif
+		if (j == list_size) {
+			lists[count].index = count;
+			lists[count].width = sensor_supported_lists[id][i].width;
+			lists[count].height = sensor_supported_lists[id][i].height;
+			lists[count].interval[0] = sensor_supported_lists[id][i].interval[0];
+			lists[count].interval[1] = sensor_supported_lists[id][i].interval[1];
+			count++;
+		}
+	}
+
 	/* TODO: handle variation of sensor */
 	/* check whether same format has serveral resolutions */
-	int array_size = fmt_count * 4 * r;
+	int array_size = fmt_count * 4 * count;
 	int32_t available_stream_configs[array_size];
 	int64_t available_frame_min_durations[array_size];
 	for(int f = 0; f < fmt_count; f++) {
-#if 1
-		for (int j = 0; j < r ; j++) {
-			int offset = f*4*r + j*4;
-			ALOGDI("[%s] f:%d, j:%d, r:%d, offset:%d", __func__, f, j, r, offset);
+		for (int j = 0; j < count ; j++) {
+			int offset = f*4*count + j*4;
+			ALOGDI("[%s] f:%d, j:%d, r:%d, offset:%d", __func__, f, j, count, offset);
 			available_stream_configs[offset] = scaler_formats[f];
-			available_stream_configs[1+offset] = frames[j].width;
-			available_stream_configs[2+offset] = frames[j].height;
+			available_stream_configs[1+offset] = lists[j].width;
+			available_stream_configs[2+offset] = lists[j].height;
 			available_stream_configs[3+offset] = ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT;
 			available_frame_min_durations[offset] = scaler_formats[f];
-			available_frame_min_durations[1+offset] = frames[j].width;
-			available_frame_min_durations[2+offset] = frames[j].height;
-			available_frame_min_durations[3+offset] = frames[j].interval[V4L2_INTERVAL_MIN];
+			available_frame_min_durations[1+offset] = lists[j].width;
+			available_frame_min_durations[2+offset] = lists[j].height;
+			available_frame_min_durations[3+offset] = lists[j].interval[V4L2_INTERVAL_MIN];
 		}
-#else
-		int m = r -1;
-		for (int j = 0; j < r ; j++) {
-			int offset = f*4*r + j*4;
-			ALOGDI("[%s] f:%d, j:%d, r:%d, offset:%d", __func__, f, j, r, offset);
-			available_stream_configs[offset] = scaler_formats[f];
-			available_stream_configs[1+offset] = frames[m].width;
-			available_stream_configs[2+offset] = frames[m].height;
-			available_stream_configs[3+offset] = ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT;
-			available_frame_min_durations[offset] = scaler_formats[f];
-			available_frame_min_durations[1+offset] = frames[m].width;
-			available_frame_min_durations[2+offset] = frames[m].height;
-			available_frame_min_durations[3+offset] = frames[m].interval[V4L2_INTERVAL_MIN];
-			m--;
-		}
-#endif
 	}
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS,
 			  available_stream_configs,
@@ -347,14 +424,14 @@ const camera_metadata_t *initStaticMetadata(uint32_t facing,
 		HAL_PIXEL_FORMAT_BLOB /* 0x21: for jpeg */
 	};
 	fmt_count = sizeof(stall_formats)/sizeof(int32_t);
-	int stall_array_size = fmt_count * 4 * r;
+	int stall_array_size = fmt_count * 4 * count;
 	int64_t available_stall_durations[stall_array_size];
 	for (int f = 0; f < fmt_count; f++) {
-		for (int j = 0; j < r; j++) {
-			int offset = f*4*r + j*4;
+		for (int j = 0; j < count; j++) {
+			int offset = f*4*count + j*4;
 			available_stall_durations[f+offset] = stall_formats[f];
-			available_stall_durations[f+1+offset] = frames[j].width;
-			available_stall_durations[f+2+offset] = frames[j].height;
+			available_stall_durations[f+1+offset] = lists[j].width;
+			available_stall_durations[f+2+offset] = lists[j].height;
 			available_stall_durations[f+3+offset] = available_fps_ranges[0];
 		}
 	}
@@ -379,7 +456,7 @@ const camera_metadata_t *initStaticMetadata(uint32_t facing,
 	/*
 	 * size = width * height for BLOB format * scaling factor
 	 */
-	int32_t jpegMaxSize = checkMaxJpegSize(r, frames);
+	int32_t jpegMaxSize = checkMaxJpegSize(r, lists);
 	staticInfo.update(ANDROID_JPEG_MAX_SIZE, &jpegMaxSize, 1);
 
 	uint8_t timestampSource = ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME;
@@ -719,13 +796,11 @@ const camera_metadata_t *initStaticMetadata(uint32_t facing,
 			  available_characteristics_keys,
 			  sizeof(available_characteristics_keys)/sizeof(int32_t));
 
-	meta = staticInfo.release();
-
 	ALOGDI("End initStaticMetadata");
-	return meta;
+	return staticInfo.release();
 }
 
-camera_metadata_t* translateMetadata (const camera_metadata_t *request,
+camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *request,
 		exif_attribute_t *exif,
 		nsecs_t timestamp,
 		uint8_t pipeline_depth)
@@ -735,7 +810,6 @@ camera_metadata_t* translateMetadata (const camera_metadata_t *request,
 		return NULL;
 	}
 	CameraMetadata meta;
-	camera_metadata_t *result;
 	CameraMetadata metaData;
 
 	meta = request;
@@ -947,8 +1021,8 @@ camera_metadata_t* translateMetadata (const camera_metadata_t *request,
 				scalerCropRegion[0], scalerCropRegion[1], scalerCropRegion[2],
 				scalerCropRegion[3]);
 		metaData.update(ANDROID_SCALER_CROP_REGION, scalerCropRegion, 4);
-		if (((scalerCropRegion[2] - scalerCropRegion[0]) == pixel_array_size[0]) &&
-				((scalerCropRegion[3] - scalerCropRegion[1]) == pixel_array_size[1]))
+		if (((scalerCropRegion[2] - scalerCropRegion[0]) == pixel_array_size[id][0]) &&
+				((scalerCropRegion[3] - scalerCropRegion[1]) == pixel_array_size[id][1]))
 				scaling = false;
 		if (scaling && exif)
 			exif->setCropResolution(scalerCropRegion[0], scalerCropRegion[1],
@@ -974,7 +1048,7 @@ camera_metadata_t* translateMetadata (const camera_metadata_t *request,
 		int64_t minFrameDuration = 0;
 		if (meta.exists(ANDROID_CONTROL_AE_TARGET_FPS_RANGE)) {
 			minFrameDuration = meta.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE).data.i32[0];
-			ALOGDI("minFrame:%ld", minFrameDuration);
+			ALOGDI("minFrame:%lld", minFrameDuration);
 			minFrameDuration = (long) 1e9/ minFrameDuration;
 		}
 		ALOGDV("ANDROID_SENSOR_FRAME_DURATION:%ld, Min:%ld",
@@ -1160,8 +1234,8 @@ camera_metadata_t* translateMetadata (const camera_metadata_t *request,
 		metaData.update(ANDROID_STATISTICS_SCENE_FLICKER, &sceneFlicker, 1);
 	}
 	*/
-	result = metaData.release();
-	return result;
+	meta.clear();
+	return metaData.release();
 }
 
 }; /*namespace android*/

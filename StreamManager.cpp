@@ -158,15 +158,14 @@ unlock:
 int StreamManager::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 			const camera_metadata_t *request)
 {
+	if (!request)
+		return -EINVAL;
+
 	CameraMetadata meta;
-	CameraMetadata metaData;
 	uint32_t cropX;
 	uint32_t cropY;
 	uint32_t cropWidth;
 	uint32_t cropHeight;
-
-	if (request)
-		meta  = request;
 
 	if (meta.exists(ANDROID_SCALER_CROP_REGION)) {
 		cropX = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[0];
@@ -257,6 +256,7 @@ unlock:
 
 exit:
 	ALOGDV("[%s] scaling done", __func__);
+	meta.clear();
 	return ret;
 }
 
@@ -391,31 +391,16 @@ int StreamManager::configureStreams(camera3_stream_configuration_t *stream_list)
 		camera3_stream_t *stream = stream_list->streams[i];
 		ALOGDD("[%zu] format:0x%x, width:%d, height:%d, usage:0x%x",
 				i, stream->format, stream->width, stream->height, stream->usage);
-		mStream[i] = new Stream(mFd[0], mScaler, mAllocator, &mResultCb, stream, i);
+		mStream[i] = new Stream(mCameraId, mFd[0], mScaler, mAllocator, &mResultCb, stream, i);
 		if (mStream[i] == NULL) {
 			ALOGE("Failed to create stream:%d", i);
 			return -EINVAL;
 		}
 		stream->priv = mStream[i]->getStream();
+		ALOGDD("[%zu] Mode:%d", i, mStream[i]->getMode());
 	}
 
 	return NO_ERROR;
-}
-
-sp<Stream> StreamManager::getStream(uint32_t type)
-{
-	sp<Stream> stream = NULL;
-	int j;
-
-	for (j = 0; j < NX_MAX_STREAM; j++)
-	{
-		if ((mStream[j] != NULL) && (mStream[j]->getMode() == type)) {
-			stream = mStream[j];
-			break;
-		}
-	}
-
-	return stream;
 }
 
 int StreamManager::getRunningStreamsCount(void)
@@ -496,7 +481,7 @@ fail:
 int StreamManager::registerRequests(camera3_capture_request_t *r)
 {
 	CameraMetadata setting;
-	const camera_metadata_t *meta = NULL;
+	camera_metadata_t *meta = NULL;
 	sp<Stream> stream;
 	int ret = NO_ERROR;
 
@@ -585,10 +570,9 @@ int StreamManager::stopStream()
 	int ret = NO_ERROR, i;
 
 	ALOGDD("[%s] Enter", __func__);
-	for (i = 0; i <NX_MAX_STREAM; i++) {
+	for (i = 0; i < NX_MAX_STREAM; i++) {
 		if ((mStream[i] != NULL) && (mStream[i]->isRunning()))
 			mStream[i]->stopStreaming();
-			mStream[i] = NULL;
 	}
 	ALOGDV("[%s] mRequestQ:%d, mRQ:%d, mResultQ[%d:%d:%d:%d]",
 			__func__, mRequestQ.size(), mRQ.size(), mResultQ[0].size(),
@@ -599,9 +583,17 @@ int StreamManager::stopStream()
 		usleep(1000);
 	}
 
+	for (i = 0; i < NX_MAX_STREAM; i++) {
+		if (mStream[i] != NULL) {
+			mStream[i].clear();
+			mStream[i] = NULL;
+		}
+	}
 #ifdef VERIFY_FRIST_FRAME
-	if (mAllocator && firstFrame)
+	if (mAllocator && firstFrame) {
 		mAllocator->free(mAllocator, firstFrame);
+		firstFrame = NULL;
+	}
 #endif
 	ALOGDD("[%s]", __func__);
 	if (isRunning()) {
@@ -643,6 +635,8 @@ int StreamManager::sendResult(void)
 
 	/* notify */
 	nsecs_t timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
+	/*ALOGDD("[Recorded file duration] [SENSOR] camera_id:%d - :%ld", mCameraId,
+			nanoseconds_to_milliseconds(systemTime(SYSTEM_TIME_MONOTONIC)));*/
 	camera3_notify_msg_t msg;
 	memset(&msg, 0x0, sizeof(camera3_notify_msg_t));
 	msg.type = CAMERA3_MSG_SHUTTER;
@@ -718,8 +712,9 @@ int StreamManager::sendResult(void)
 		}
 	}
 #endif
-	result.result = translateMetadata(request->meta, exif, timestamp,
-			mPipeLineDepth);
+	camera_metadata_t *meta = translateMetadata(mCameraId, request->meta, exif,
+			timestamp, mPipeLineDepth);
+	result.result = (const camera_metadata_t *)meta;
 	if (preview != NULL) {
 		for (uint32_t i = 0; i < result.num_output_buffers; i++) {
 			camera3_stream_t *s = output_buffers[i].stream;
@@ -757,10 +752,13 @@ int StreamManager::sendResult(void)
 
 	mCb->process_capture_result(mCb, &result);
 	request = mRequestQ.dequeue();
-	if (request)
+	if (request) {
+		if (request->meta)
+			free(request->meta);
 		free(request);
+	}
 	ALOGDV("[%s] Exit", __func__);
-
+	free(meta);
 	return 0;
 }
 

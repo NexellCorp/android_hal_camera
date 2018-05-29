@@ -25,15 +25,16 @@ namespace android {
 typedef struct nx_camera_request {
 	uint32_t frame_number;
 	uint32_t num_output_buffers;
-	const camera_metadata_t *meta;
+	camera_metadata_t *meta;
 	const camera3_stream_buffer_t *input_buffer;
 } nx_camera_request_t;
 
 class StreamManager : public Thread {
 public:
-	StreamManager(int fd[], int scaler, alloc_device_t *allocator,
+	StreamManager(uint32_t id, int fd[], int scaler, alloc_device_t *allocator,
 			const camera3_callback_ops_t *callback)
-		: mScaler(scaler),
+		: mCameraId(id),
+		mScaler(scaler),
 		mAllocator(allocator),
 		mCb(callback),
 		mNumBuffers(0),
@@ -75,7 +76,7 @@ private:
 	int allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_handle_t *p);
 	int jpegEncoding(private_handle_t *dst, private_handle_t *src,
 			exif_attribute_t *exif);
-	int scaling(private_handle_t *src, private_handle_t *dst,
+	int scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 			const camera_metadata_t *request);
 	int copyBuffer(private_handle_t *dst, private_handle_t *src);
 	int runStreamThread(camera3_stream_t *s);
@@ -83,6 +84,7 @@ private:
 			int num_buffers, camera3_stream_t *s);
 
 private:
+	uint32_t mCameraId;
 	int mFd[MAX_VIDEO_HANDLES];
 	int mScaler;
 	alloc_device_t *mAllocator;

@@ -130,8 +130,7 @@ int v4l2_get_framesize(int fd, struct v4l2_frame_interval *f)
 		f->height = frame.stepwise.max_height;
 		ALOGDV("[%s] index:%d, width:%d, height:%d", __func__,
 			f->index, f->width, f->height);
-	} else
-		ALOGE("[%s] failed to get frame size ret:%d", __func__, ret);
+	}
 	return ret;
 }
 

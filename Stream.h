@@ -29,9 +29,6 @@
 #include "NXQueue.h"
 #include "ExifProcessor.h"
 
-
-#define NX_MAX_STREAM 4
-
 namespace android {
 
 class NXCamera3Buffer {
@@ -41,7 +38,19 @@ public:
 	virtual ~NXCamera3Buffer() {
 	}
 	void init (uint32_t frameNumber, camera3_stream_t *s,
-		buffer_handle_t *b, const camera_metadata_t *meta) {
+		buffer_handle_t *b, buffer_handle_t z,
+		const camera_metadata_t *meta) {
+		ALOGDI("[%s] frame_number:%d, mStream:%p, mBuffer:%p",
+			__func__, frameNumber, s, b);
+		mFrameNumber = frameNumber;
+		mStream = s;
+		mBuffer = *b;
+		mZmBuffer = z;
+		mMeta = meta;
+	}
+	void init (uint32_t frameNumber, camera3_stream_t *s,
+		buffer_handle_t *b,
+		const camera_metadata_t *meta) {
 		ALOGDI("[%s] frame_number:%d, mStream:%p, mBuffer:%p",
 			__func__, frameNumber, s, b);
 		mFrameNumber = frameNumber;
@@ -52,8 +61,15 @@ public:
 	private_handle_t *getPrivateHandle() {
 		return (private_handle_t*)(mBuffer);
 	}
+	private_handle_t *getZoomPrivateHandle() {
+		return (private_handle_t*)(mZmBuffer);
+	}
 	int getDmaFd() {
 		private_handle_t *h = (private_handle_t*)(mBuffer);
+		return h->share_fd;
+	}
+	int getZoomDmaFd() {
+		private_handle_t *h = (private_handle_t*)(mZmBuffer);
 		return h->share_fd;
 	}
 	camera3_stream_t *getStream(){
@@ -61,6 +77,9 @@ public:
 	}
 	buffer_handle_t *getBuffer() {
 		return &mBuffer;
+	}
+	buffer_handle_t *getZoomBuffer() {
+		return &mZmBuffer;
 	}
 	uint32_t getFrameNumber() {
 		return mFrameNumber;
@@ -72,6 +91,7 @@ private:
 	uint32_t mFrameNumber;
 	camera3_stream_t *mStream;
 	buffer_handle_t mBuffer;
+	buffer_handle_t mZmBuffer;
 	const camera_metadata_t *mMeta;
 
 }; /* NXCamera3Buffer */
@@ -85,31 +105,43 @@ typedef struct nx_camera3_callback_ops {
 
 class Stream : public Thread {
 public:
-	Stream(int fd, int scaler, alloc_device_t *allocator,
+	Stream(uint32_t id, int fd, int scaler, alloc_device_t *allocator,
 			nx_camera3_callback_ops_t *cb,
 			camera3_stream_t * stream,
 			uint32_t type)
-		: mFd(fd),
+		: mCameraId(id),
+		mFd(fd),
 		mScaler(scaler),
 		mAllocator(allocator),
 		mCb(cb),
 		mStream(stream),
 		mTmpBuf(NULL),
-		mScaleBuf(NULL),
 		mType(type),
 		mSize(0),
 		mQIndex(0),
 		mMaxBufIndex(0),
-		mSkip(0) {
-			ALOGDD("[%s:%d] create", __func__, mType);
-			for (uint32_t i = 0; i < MAX_BUFFER_COUNT + 2; i++)
+		mSkip(0),
+		mScaling(0) {
+			for (uint32_t i = 0; i < MAX_BUFFER_COUNT + 2; i++) {
+				if (i < MAX_BUFFER_COUNT)
+					mZmBuf[i] = NULL;
 				mFQ.queue(&mBuffers[i]);
+			}
+#if defined(CAMERA_SUPPORT_SCALING)
+			if (!isSupportedResolution(mCameraId, getWidth(), getHeight()))
+				mScaling = true;
+#endif
+			ALOGDD("[%s:%d] create - scaling is %s", __func__, mType,
+					(mScaling) ? "enabled" : "disabled");
 		}
 	virtual ~Stream() {
 		ALOGDD("[%s:%d] delete", __func__, mType);
 	}
 	void setQIndex(int index) {
 		mQIndex = index % mMaxBufIndex;
+	}
+	uint32_t getQIndex() {
+		return mQIndex;
 	}
 	void setSkipFlag(bool skip) {
 		mSkip = skip;
@@ -143,7 +175,8 @@ public:
 	void stopStreaming();
 	bool isThisStream(camera3_stream_t *b);
 	bool calScalingFactor(const camera_metadata_t *meta, uint32_t *crop);
-	int scaling(private_handle_t *src, const camera_metadata_t *meta);
+	int scaling(private_handle_t *dst, private_handle_t *src,
+			const camera_metadata_t *meta);
 	int jpegEncoding(private_handle_t *dst, private_handle_t *src,
 			exif_attribute_t *exif);
 	int skipFrames();
@@ -157,6 +190,7 @@ protected:
 	virtual bool threadLoop();
 
 private:
+	uint32_t mCameraId;
 	int mFd;
 	int mScaler;
 	alloc_device_t *mAllocator;
@@ -164,12 +198,13 @@ private:
 	const nx_camera3_callback_ops_t *mCb;
 	const camera3_stream_t * mStream;
 	buffer_handle_t mTmpBuf;
-	buffer_handle_t mScaleBuf;
+	buffer_handle_t mZmBuf[MAX_BUFFER_COUNT];
 	uint32_t mType;
 	uint32_t mSize;
 	uint32_t mQIndex;
 	uint32_t mMaxBufIndex;
 	bool mSkip;
+	bool mScaling;
 	NXQueue<NXCamera3Buffer *>mFQ;
 	NXQueue<NXCamera3Buffer *>mQ;
 	NXQueue<NXCamera3Buffer *>mRQ;

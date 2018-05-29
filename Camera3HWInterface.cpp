@@ -104,7 +104,7 @@ static void makeCameraInfo(void)
 		}
 	}
 	for (i = 0; i < NUM_OF_CAMERAS; i++) {
-		ALOGDI("[%s] %s device:%s, sub device:%s, orientation:%d ",
+		ALOGD("[%s] %s device:%s, sub device:%s, orientation:%d ",
 				__func__,
 				(gCameraInfo[i].type) ? "front" : "back",
 				gCameraInfo[i].dev_path, gCameraInfo[i].subdev_path,
@@ -219,7 +219,7 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 {
 	int fd;
 
-	ALOGDD("[%s] mCameraId:%d", __func__, mCameraId);
+	ALOGD("[%s] mCameraId:%d, buffer:%d", __func__, mCameraId, MAX_BUFFER_COUNT);
 
 	fd = open(gCameraInfo[mCameraId].dev_path, O_RDWR);
 	if (fd < 0) {
@@ -239,11 +239,8 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 	}
 
 	mCallbacks = callback;
-	for (int j = 0; j < CAMERA3_TEMPLATE_MANUAL; j++) {
-		mRequestMetadata[j] = NULL;
-	}
 
-#ifdef CAMERA_USE_ZOOM
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 	fd = scaler_open();
 	if (fd < 0) {
 		ALOGE("[%s] Failed to open scaler", __func__);
@@ -315,7 +312,7 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 	if (mStreamManager == NULL) {
 		ALOGDD("new Stream");
 		ALOGDD("==================================================");
-		mStreamManager = new StreamManager(mHandles, mScaler, mAllocator, mCallbacks);
+		mStreamManager = new StreamManager(mCameraId, mHandles, mScaler, mAllocator, mCallbacks);
 		if (mStreamManager == NULL) {
 			ALOGE("Failed to construct StreamManager for preview");
 			return -ENOMEM;
@@ -526,8 +523,8 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	/* frame duration */
 	int64_t default_frame_duration = NSEC_PER_33MSEC;
 	metaData.update(ANDROID_SENSOR_FRAME_DURATION, &default_frame_duration, 1);
-
 	mRequestMetadata[type-1] = metaData.release();
+	meta.clear();
 	return mRequestMetadata[type-1];
 }
 
@@ -649,10 +646,12 @@ int Camera3HWInterface::cameraDeviceClose()
 		mStreamManager.clear();
 		mStreamManager = NULL;
 	}
+#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 	if (mScaler >= 0) {
 		nx_scaler_close(mScaler);
 		mScaler = -1;
 	}
+#endif
 	if (mAllocator) {
 		mAllocator->common.close((struct hw_device_t *)mAllocator);
 		mAllocator = NULL;
@@ -662,10 +661,11 @@ int Camera3HWInterface::cameraDeviceClose()
 		if (mHandles[i] >= 0)
 			close(mHandles[i]);
 		mHandles[i] = -1;
-		gCameraInfo[mCameraId].metadata = NULL;
 	}
-	for (int i = 0; i < CAMERA3_TEMPLATE_MANUAL; i++)
+	for (int i = 0; i < CAMERA3_TEMPLATE_MANUAL; i++) {
+		free(mRequestMetadata[i]);
 		mRequestMetadata[i] = NULL;
+	}
 	return 0;
 }
 
@@ -689,7 +689,6 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 
 	if (gCameraInfo[camera_id].dev_path[0] == '\0')
 		makeCameraInfo();
-
 	fd = open(gCameraInfo[camera_id].dev_path, O_RDWR);
 	if (fd < 0) {
 		ALOGE("Failed to open %s camera :%d",
@@ -706,7 +705,7 @@ static int getCameraInfo(int camera_id, struct camera_info *info)
 	info->conflicting_devices_length = 0;
 
 	if (gCameraInfo[camera_id].metadata == NULL)
-		gCameraInfo[camera_id].metadata = initStaticMetadata(info->facing,
+		gCameraInfo[camera_id].metadata = initStaticMetadata(camera_id, info->facing,
 								info->orientation, fd);
 	info->static_camera_characteristics = gCameraInfo[camera_id].metadata;
 
