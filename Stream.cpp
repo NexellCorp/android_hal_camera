@@ -479,18 +479,11 @@ bool Stream::isThisStream(camera3_stream_t *b)
 	}
 	return false;
 }
-#if 0
-int testCount = 0;
-#endif
+
 int Stream::sendResult(void)
 {
 	int ret = NO_ERROR;
-#if 0
-	if (testCount == 3)
-		while(1);
-	else
-		testCount++;
-#endif
+
 	ALOGDV("[%s:%d]", __func__, mType);
 
 	NXCamera3Buffer *buf = mRQ.getHead();
@@ -843,7 +836,7 @@ fail:
 	if (ret)
 		ALOGE("Failed to req buf(line:%d):%d, mFd:%d", __LINE__, ret, mFd);
 drain:
-
+	drainBuffer();
 #if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 	for (i = 0; i < MAX_BUFFER_COUNT; i++) {
 		if ((mAllocator) && (mZmBuf[i]))
@@ -852,7 +845,6 @@ drain:
 	}
 #endif
 	ALOGE("[%s:%d] drain - Failed to set buffer format:%d", __func__, mType, ret);
-	drainBuffer();
 	return ret;
 }
 
