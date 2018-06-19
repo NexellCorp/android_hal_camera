@@ -457,7 +457,7 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 		}
 		count = getRunningStreamsCount();
 		ALOGDV("[%s] get current RunningStreamsCount:%d", __func__, count);
-		if (count >= MAX_VIDEO_HANDLES)
+		if (mFd[count] < 0)
 			skip = true;
 		else
 			stream->setHandle(mFd[count]);

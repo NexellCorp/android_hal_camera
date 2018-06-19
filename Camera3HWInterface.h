@@ -16,6 +16,7 @@
 #ifndef CAMERA3_HW_INTERFACE_H
 #define CAMERA3_HW_INTERFACE_H
 
+
 namespace android {
 
 /*****************************************************************************/

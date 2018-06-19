@@ -31,10 +31,11 @@ struct CameraInfo {
 	char	dev_path[20];
 	char	subdev_path[20];
 	int	orientation;
+	int	max_handles;
 	const	camera_metadata_t *metadata;
 };
 
-static struct CameraInfo gCameraInfo[NUM_OF_CAMERAS] = {{0, {0, }, {0, }, 0, 0}, };
+static struct CameraInfo gCameraInfo[NUM_OF_CAMERAS] = {{0, {0, }, {0, }, 0, 2, 0}, };
 /**
  * Static Function
  */
@@ -43,9 +44,11 @@ static void makeCameraInfo(void)
 	int video_num = 0, i = 0, j = 0;
 	char string[20] = {0, };
 	char *ptr = NULL;
+	int interlaced = 0;
 
-	ALOGDI("[%s] num of cameras:%d, back:%s, front:%s", __func__,
-			NUM_OF_CAMERAS, BACK_CAMERA_DEVICE, FRONT_CAMERA_DEVICE);
+	ALOGDI("[%s] num of cameras:%d, back:%s-%s, front:%s-%s", __func__,
+			NUM_OF_CAMERAS, BACK_CAMERA_DEVICE, BACK_CAMERA_INTERLACED,
+			FRONT_CAMERA_DEVICE, FRONT_CAMERA_INTERLACED);
 
 	if (BACK_CAMERA_DEVICE)
 		strcpy(string, BACK_CAMERA_DEVICE);
@@ -74,7 +77,24 @@ static void makeCameraInfo(void)
 			break;
 		}
 	}
+	if (BACK_CAMERA_INTERLACED)
+		strcpy(string, BACK_CAMERA_INTERLACED);
+	ptr = strtok(string, ",");
+	for (j = 0; j < i; j++) {
+		if (ptr != NULL) {
+			interlaced = atoi(ptr);
+			if (interlaced)
+				gCameraInfo[j].max_handles = 1;
+			else
+				gCameraInfo[j].max_handles = 2;
+			ptr = strtok(NULL, ",");
+		} else {
+			gCameraInfo[j].max_handles = 2;
+			break;
+		}
+	}
 
+	int p = i;
 	if (FRONT_CAMERA_DEVICE)
 		strcpy(string, FRONT_CAMERA_DEVICE);
 	ptr = strtok(string, ",");
@@ -94,7 +114,7 @@ static void makeCameraInfo(void)
 	if (FRONT_CAMERA_ORIENTATION)
 		strcpy(string, FRONT_CAMERA_ORIENTATION);
 	ptr = strtok(string, ",");
-	for (; j < i; j++) {
+	for (j = p; j < i; j++) {
 		if (ptr != NULL) {
 			gCameraInfo[j].orientation = atoi(ptr);
 			ptr = strtok(NULL, ",");
@@ -103,12 +123,29 @@ static void makeCameraInfo(void)
 			break;
 		}
 	}
+	if (FRONT_CAMERA_INTERLACED)
+		strcpy(string, FRONT_CAMERA_INTERLACED);
+	ptr = strtok(string, ",");
+	for (j = p; j < i; j++) {
+		if (ptr != NULL) {
+			interlaced = atoi(ptr);
+			if (interlaced)
+				gCameraInfo[j].max_handles = 1;
+			else
+				gCameraInfo[j].max_handles = 2;
+			ptr = strtok(NULL, ",");
+		} else {
+			gCameraInfo[j].max_handles = 2;
+			break;
+		}
+	}
 	for (i = 0; i < NUM_OF_CAMERAS; i++) {
-		ALOGD("[%s] %s device:%s, sub device:%s, orientation:%d ",
+		ALOGDI("[%s] %s device:%s, sub device:%s, orientation:%d, %d, %s",
 				__func__,
 				(gCameraInfo[i].type) ? "front" : "back",
 				gCameraInfo[i].dev_path, gCameraInfo[i].subdev_path,
-				gCameraInfo[i].orientation);
+				gCameraInfo[i].orientation, gCameraInfo[i].max_handles,
+				(gCameraInfo[i].max_handles == 1) ? "interlaced" : "progressive");
 	}
 }
 
@@ -205,6 +242,9 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 	mCameraDevice.ops = &camera3Ops;
 	mCameraDevice.priv = this;
 
+	for (int i = 0; i < MAX_VIDEO_HANDLES; i++)
+		mHandles[i] = -1;
+
 	ALOGDI("cameraId = %d", cameraId);
 	ALOGDI("tag = %d", mCameraDevice.common.tag);
 	ALOGDI("version = %d", mCameraDevice.common.version);
@@ -228,14 +268,14 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		return -ENODEV;
 	}
 	mHandles[0] = fd;
-	if (MAX_VIDEO_HANDLES > 1) {
+	if (gCameraInfo[mCameraId].max_handles > 1) {
 		fd = open(gCameraInfo[mCameraId].subdev_path, O_RDWR);
 		if (fd < 0) {
 			ALOGE("Failed to open %s camera :%d",
 					(gCameraInfo[mCameraId].type) ? "Front"  : "Back", fd);
 			return -ENODEV;
 		}
-		mHandles[MAX_VIDEO_HANDLES - 1] = fd;
+		mHandles[gCameraInfo[mCameraId].max_handles - 1] = fd;
 	}
 
 	mCallbacks = callback;
