@@ -377,6 +377,10 @@ int Stream::skipFrames(void)
 			return -EINVAL;
 		}
 #endif
+		if (mCrop) {
+			w = mCropInfo.width;
+			h = mCropInfo.height;
+		}
 		for (i = 1; i < MAX_BUFFER_COUNT; i++) {
 			allocBuffer(w, h, ph->format, &mZmBuf[i]);
 			if (mZmBuf[i] == NULL) {
@@ -592,7 +596,7 @@ int Stream::setBufferFormat(private_handle_t *buf)
 	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
 	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
 	android_ycbcr ycbcr;
-	int ret, f;
+	int ret, f, width = 0, height = 0;
 	uint32_t num_planes = 3;
 	uint32_t strides[num_planes];
 	uint32_t sizes[num_planes];
@@ -621,11 +625,23 @@ int Stream::setBufferFormat(private_handle_t *buf)
 		return -EINVAL;
 	}
 
-	ret = v4l2_set_format(mFd, f, buf->width, buf->height,
-			num_planes, strides, sizes);
+	if (mCrop) {
+		getAvaliableResolution(mCameraId, &width, &height);
+	} else {
+		width = buf->width;
+		height = buf->height;
+	}
+	ret = v4l2_set_format(mFd, f, width, height, num_planes, strides, sizes);
 	if (ret) {
 		ALOGE("Failed to set format: %d", ret);
 		return ret;
+	}
+	if (mCrop) {
+		ret = v4l2_set_crop(mFd, &mCropInfo);
+		if (ret) {
+			ALOGE("Failed to set crop: %d", ret);
+			return ret;
+		}
 	}
 	if (module != NULL) {
 		ret = module->unlock(module, buf);
@@ -642,14 +658,14 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 {
 	int ret = NO_ERROR;
 
-	ALOGDV("[%s:%d] Enter frame_number:%d", __func__, mType,
-			fNum);
 	NXCamera3Buffer *buffer = mFQ.dequeue();
 	if (!buffer) {
 		ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
 		return -ENOMEM;
 	}
 	private_handle_t *b = (private_handle_t*)*buf->buffer;
+	ALOGDV("[%s:%d] Enter frame_number:%d, width:%d, height:%d",
+			__func__, mType, fNum, b->width, b->height);
 #if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 #ifdef CAMERA_SUPPORT_SCALING
 	if (!mScaling)
@@ -667,6 +683,10 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 				return -EINVAL;
 			}
 #endif
+			if (mCrop) {
+				width = mCropInfo.width;
+				height = mCropInfo.height;
+			}
 			allocBuffer(width, height, b->format, &mZmBuf[0]);
 			if (mZmBuf[0] == NULL) {
 				ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
@@ -761,6 +781,10 @@ status_t Stream::prepareForRun()
 			return -EINVAL;
 		}
 #endif
+		if (mCrop) {
+			width = mCropInfo.width;
+			height = mCropInfo.height;
+		}
 		for (i = 1; i < MAX_BUFFER_COUNT; i++) {
 			allocBuffer(width, height, format, &mZmBuf[i]);
 			if (mZmBuf[i] == NULL) {
