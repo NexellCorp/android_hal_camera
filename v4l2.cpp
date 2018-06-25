@@ -117,12 +117,12 @@ int v4l2_streamoff(int fd)
 	return ioctl(fd, VIDIOC_STREAMOFF, &buf_type);
 }
 
-int v4l2_get_framesize(int fd, struct v4l2_frame_interval *f)
+int v4l2_get_framesize(int fd, struct v4l2_frame_info *f)
 {
 	struct v4l2_frmsizeenum frame;
 	int ret = 0;
 
-	ALOGDV("[%s] index:%d", __func__, f->index);
+	ALOGDI("[%s] index:%d", __func__, f->index);
 	frame.index = f->index;
 	ret = ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frame);
 	if (!ret) {
@@ -131,10 +131,12 @@ int v4l2_get_framesize(int fd, struct v4l2_frame_interval *f)
 		ALOGDV("[%s] index:%d, width:%d, height:%d", __func__,
 			f->index, f->width, f->height);
 	}
+		ALOGDI("[%s] index:%d, width:%d, height:%d", __func__,
+			f->index, f->width, f->height);
 	return ret;
 }
 
-int v4l2_get_frameinterval(int fd, struct v4l2_frame_interval *f, int minOrMax)
+int v4l2_get_frameinterval(int fd, struct v4l2_frame_info *f, int minOrMax)
 {
 	struct v4l2_frmivalenum frame;
 	int ret;
@@ -151,6 +153,42 @@ int v4l2_get_frameinterval(int fd, struct v4l2_frame_interval *f, int minOrMax)
 	} else
 		ALOGE("failed to get frame interval information :%d", ret);
 	return ret;
+}
+
+int v4l2_get_crop(int fd, struct v4l2_crop_info *crop)
+{
+	struct v4l2_crop f;
+	int ret = 0;
+
+	f.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	ret = ioctl(fd, VIDIOC_G_CROP, &f);
+	if (!ret) {
+		ALOGDI("[%s] crop left:%d top:%d width:%d, height:%d", __func__,
+			f.c.left, f.c.top, f.c.width, f.c.height);
+		if (!f.c.width || !f.c.height)
+			return -EINVAL;
+		crop->left = f.c.left;
+		crop->top = f.c.top;
+		crop->width = f.c.width;
+		crop->height = f.c.height;
+	} else
+		ALOGDI("[%s] crop left:%d top:%d width:%d, height:%d", __func__,
+			f.c.left, f.c.top, f.c.width, f.c.height);
+	return ret;
+}
+
+int v4l2_set_crop(int fd, struct v4l2_crop_info *crop)
+{
+	struct v4l2_crop f;
+
+	f.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	f.c.left = crop->left;
+	f.c.top = crop->top;
+	f.c.width = crop->width;
+	f.c.height = crop->height;
+	ALOGDV("[%s] crop left:%d top:%d width:%d, height:%d", __func__,
+		f.c.left, f.c.top, f.c.width, f.c.height);
+	return ioctl(fd, VIDIOC_S_CROP, &f);
 }
 
 }; // namespace android
