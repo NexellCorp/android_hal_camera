@@ -17,12 +17,13 @@ namespace android {
 int32_t pixel_array_size[NUM_OF_CAMERAS][2] = {{0, 0}, };
 
 #ifdef CAMERA_SUPPORT_SCALING
-struct v4l2_frame_info supported_lists[5] = {
+struct v4l2_frame_info supported_lists[6] = {
 	{0, 176, 144, {15, 30}},/*QCIF*/
 	{1, 320, 240, {15, 30}},/*QVGA*/
 	{2, 352, 288, {15, 30}},/*CIF*/
 	{3, 640, 480, {15, 30}},/*VGA*/
 	{4, 1280, 720, {15, 30}},/*HD*/
+	{5, 1920, 1080, {15, 30}},/*FHD*/
 };
 #endif
 
