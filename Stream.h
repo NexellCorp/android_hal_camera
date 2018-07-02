@@ -28,7 +28,6 @@
 
 #include "NXQueue.h"
 #include "ExifProcessor.h"
-#include "v4l2.h"
 
 namespace android {
 
@@ -122,8 +121,7 @@ public:
 		mQIndex(0),
 		mMaxBufIndex(0),
 		mSkip(0),
-		mScaling(0),
-		mCrop(0) {
+		mScaling(0) {
 			for (uint32_t i = 0; i < MAX_BUFFER_COUNT + 2; i++) {
 				if (i < MAX_BUFFER_COUNT)
 					mZmBuf[i] = NULL;
@@ -133,10 +131,8 @@ public:
 			if (!isSupportedResolution(mCameraId, getWidth(), getHeight()))
 				mScaling = true;
 #endif
-			mCrop = getCropInfo(mCameraId, &mCropInfo);
-			ALOGDD("[%s:%d] create - scaling is %s, crop is %s", __func__, mType,
-					(mScaling) ? "enabled" : "disabled",
-					(mCrop) ? "enabled" : "disabled");
+			ALOGDD("[%s:%d] create - scaling is %s", __func__, mType,
+					(mScaling) ? "enabled" : "disabled");
 		}
 	virtual ~Stream() {
 		ALOGDD("[%s:%d] delete", __func__, mType);
@@ -209,13 +205,11 @@ private:
 	uint32_t mMaxBufIndex;
 	bool mSkip;
 	bool mScaling;
-	bool mCrop;
 	NXQueue<NXCamera3Buffer *>mFQ;
 	NXQueue<NXCamera3Buffer *>mQ;
 	NXQueue<NXCamera3Buffer *>mRQ;
 	Mutex mLock;
 	NXCamera3Buffer mBuffers[MAX_BUFFER_COUNT+2];
-	struct v4l2_crop_info mCropInfo;
 
 	int setBufferFormat(private_handle_t *h);
 	int sendResult();
