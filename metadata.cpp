@@ -453,6 +453,7 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 		}
 	}
 
+#ifdef CAMERA_SUPPORT_SCALING
 	while (j < list_size) {
 		lists[count].index = count;
 		lists[count].width = supported_lists[j].width;
@@ -462,6 +463,7 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 		count++;
 		j++;
 	}
+#endif
 	for (i = 0; i < count; i++)
 		ALOGDI("[%d] width:%d, height:%d, min:%d, max:%d", count-1, lists[count-1].width,
 				lists[count-1].height, lists[count-1].interval[0], lists[count-1].interval[1]);
