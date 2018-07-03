@@ -666,6 +666,7 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 		ret = mStreamManager->registerRequests(request);
 		if (ret) {
 			ALOGE("Failed to registerRequest for preview");
+			sendResult();
 			return ret;
 		}
 	}

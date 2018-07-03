@@ -305,24 +305,24 @@ int Stream::skipFrames(void)
 	buffer_handle_t frames[NUM_OF_SKIP_FRAMES];
 	private_handle_t *p;
 	size_t bufferCount = 0, i = 0;
-	int ret = NO_ERROR, dma_fd = 0, dqIndex = 0, fd = 0;
+	int ret = -EINVAL, dma_fd = 0, dqIndex = 0, fd = 0;
 	private_handle_t *ph;
 
 	if (!NUM_OF_SKIP_FRAMES)
-		return ret;
+		return NO_ERROR;
 
 	ALOGDD("[%s:%d]", __func__, mType);
 
 	bufferCount = mQ.size();
 	if (bufferCount <= 0) {
 		ALOGDV("[%s:%d] mQ.size is invalid", __func__, mType);
-		return -EINVAL;
+		return ret;
 	}
 
 	buf = mQ.getHead();
 	if (!buf) {
 		ALOGE("failed to get buf from queue");
-		return -EINVAL;
+		return ret;
 	}
 
 #ifdef CAMERA_USE_ZOOM
@@ -374,7 +374,8 @@ int Stream::skipFrames(void)
 		if ((w == ph->width) && (h == ph->height)) {
 			ALOGE("[%s:%d] Failed to get avaliable stream size",
 					__func__, mType);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto fail;
 		}
 #endif
 		if (mCrop) {
@@ -382,10 +383,11 @@ int Stream::skipFrames(void)
 			h = mCropInfo.height;
 		}
 		for (i = 1; i < MAX_BUFFER_COUNT; i++) {
-			allocBuffer(w, h, ph->format, &mZmBuf[i]);
+			ret = allocBuffer(w, h, ph->format, &mZmBuf[i]);
 			if (mZmBuf[i] == NULL) {
 				ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
 						mType);
+				ret = -ENOMEM;
 				goto fail;
 			}
 		}
@@ -441,17 +443,13 @@ int Stream::skipFrames(void)
 	return NO_ERROR;
 
 stop:
-	ret = v4l2_streamoff(mFd);
-	if (ret) {
-		ALOGE("Failed to stream off:%d", ret);
-		goto fail;
-	}
+	if (v4l2_streamoff(mFd))
+		ALOGE("Failed to stream off");
 
 fail:
 	ALOGDV("[%s:%d] fail : %d", __func__, mType, ret);
-	ret = v4l2_req_buf(mFd, 0);
-	if (ret)
-		ALOGE("Failed to reqbuf:%d", ret);
+	if (v4l2_req_buf(mFd, 0))
+		ALOGE("Failed to reqbuf");
 free:
 	for (i = 0; i < NUM_OF_SKIP_FRAMES; i++) {
 		if ((mAllocator) && (frames[i]))
@@ -466,7 +464,7 @@ free:
 #endif
 
 drain:
-	ALOGE("[%s] Failed to set buffer format:%d", __func__, ret);
+	ALOGE("[%s] Failed to skip frames:%d", __func__, ret);
 	drainBuffer();
 	return ret;
 }
@@ -716,7 +714,7 @@ status_t Stream::prepareForRun()
 {
 	NXCamera3Buffer *buf = NULL;
 	size_t bufferCount = 0, i = 0;
-	int ret = NO_ERROR, dma_fd = 0;
+	int ret = -EINVAL, dma_fd = 0;
 	private_handle_t *ph = NULL;
 	buffer_handle_t buffer;
 	int width, height, format, buf_count = 0;
@@ -724,7 +722,7 @@ status_t Stream::prepareForRun()
 	ALOGDV("[%s:%d]", __func__, mType);
 
 	if ((NUM_OF_SKIP_FRAMES) && (!mSkip))
-		return ret;
+		return NO_ERROR;
 
 	bufferCount = mQ.size();
 	if (bufferCount <= 0) {
@@ -749,7 +747,7 @@ status_t Stream::prepareForRun()
 		}
 		mMaxBufIndex = bufferCount;
 		setQIndex(bufferCount);
-		return ret;
+		return NO_ERROR;
 	}
 
 	ph = buf->getPrivateHandle();
@@ -759,8 +757,9 @@ status_t Stream::prepareForRun()
 		height = mStream->height;
 		allocBuffer(width, height, format, &buffer);
 		if (buffer == NULL) {
-			ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
+			ALOGE("[%s:%d] Failed to alloc new buffer for JPEG", __func__,
 					mType);
+			ret = -ENOMEM;
 			goto drain;
 		}
 		mTmpBuf = buffer;
@@ -778,7 +777,8 @@ status_t Stream::prepareForRun()
 		if ((width == ph->width) && (height == ph->height)) {
 			ALOGE("[%s:%d] Failed to get avaliable stream size",
 					__func__, mType);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto fail;
 		}
 #endif
 		if (mCrop) {
@@ -790,6 +790,7 @@ status_t Stream::prepareForRun()
 			if (mZmBuf[i] == NULL) {
 				ALOGE("[%s:%d] Failed to alloc new buffer for scaling", __func__,
 						mType);
+				ret = -ENOMEM;
 				goto fail;
 			}
 		}
@@ -856,9 +857,8 @@ status_t Stream::prepareForRun()
 
 fail:
 	ALOGDI("[%s:%d] fail : %d", __func__, mType, ret);
-	ret = v4l2_req_buf(mFd, 0);
-	if (ret)
-		ALOGE("Failed to req buf(line:%d):%d, mFd:%d", __LINE__, ret, mFd);
+	if (v4l2_req_buf(mFd, 0))
+		ALOGE("Failed to req buf(line:%d), mFd:%d", __LINE__, mFd);
 drain:
 	drainBuffer();
 #if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
@@ -868,7 +868,7 @@ drain:
 		mZmBuf[i] = NULL;
 	}
 #endif
-	ALOGE("[%s:%d] drain - Failed to set buffer format:%d", __func__, mType, ret);
+	ALOGE("[%s:%d] drain - Failed to prepare for run:%d", __func__, mType, ret);
 	return ret;
 }
 
