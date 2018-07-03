@@ -465,8 +465,8 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 	}
 #endif
 	for (i = 0; i < count; i++)
-		ALOGDI("[%d] width:%d, height:%d, min:%d, max:%d", count-1, lists[count-1].width,
-				lists[count-1].height, lists[count-1].interval[0], lists[count-1].interval[1]);
+		ALOGDI("[%d] width:%d, height:%d, min:%d, max:%d", i, lists[i].width,
+				lists[i].height, lists[i].interval[0], lists[i].interval[1]);
 
 	/* TODO: handle variation of sensor */
 	/* check whether same format has serveral resolutions */
