@@ -139,7 +139,7 @@ public:
 					(mCrop) ? "enabled" : "disabled");
 		}
 	virtual ~Stream() {
-		ALOGDD("[%s:%d] delete", __func__, mType);
+		ALOGDD("[%s:%d:%d] delete", __func__, mCameraId, mType);
 	}
 	void setQIndex(int index) {
 		mQIndex = index % mMaxBufIndex;

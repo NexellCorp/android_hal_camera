@@ -43,13 +43,13 @@ int StreamManager::allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_h
 	buffer_handle_t ph;
 
 	if (!mAllocator) {
-		ALOGE("mAllocator is not exist");
+		ALOGE("[%s:%d] mAllocator is not exist", __func__, mCameraId);
 		return -ENODEV;
 	}
 	ret = mAllocator->alloc(mAllocator, w, h, format,
 			PROT_READ | PROT_WRITE, &ph, &stride);
 	if (ret) {
-		ALOGE("Failed to alloc a new buffer:%d", ret);
+		ALOGE("[%s:%d] Failed to alloc a new buffer:%d", __func__, mCameraId, ret);
 		return -ENOMEM;
 	}
 	*p = ph;
@@ -69,26 +69,27 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, ex
 	module = reinterpret_cast<gralloc_module_t const *>(pmodule);
 
 	if (exif == NULL) {
-		ALOGE("[%s] Exif is NULL", __func__);
+		ALOGE("[%s:%d] Exif is NULL", __func__, mCameraId);
 		return -EINVAL;
 	}
-	ALOGDD("start jpegEncoding");
+	ALOGDD("[%s:%d]", __func__, mCameraId);
 
 	ret = module->lock(module, dst, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
 			dst->width, dst->height, &dstV);
 	if (ret) {
-		ALOGE("failed to lock for dst");
+		ALOGE("[%s:%d] failed to lock for dst", __func__, mCameraId);
 		return ret;
 	}
 
 	ret = module->lock_ycbcr(module, src, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
 			src->width, src->height, &srcY);
 	if (ret) {
-		ALOGE("Failed to lock for src");
+		ALOGE("[%s:%d] Failed to lock for src", __func__, mCameraId);
 		module->unlock(module, dst);
 		return ret;
 	}
-	ALOGDV("src: %p(%d) --> dst: %p(%d)", srcY.y, src->size,
+	ALOGDV("[%s:%d] src: %p(%d) --> dst: %p(%d)", __func__, mCameraId,
+			srcY.y, src->size,
 			dstV, dst->size);
 
 	/* make exif */
@@ -97,11 +98,11 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, ex
 	mExifProcessor.clear();
 	int exifSize = result.getSize();
 	if (!exifSize) {
-		ALOGE("Failed to make Exif");
+		ALOGE("[%s:%d] Failed to make Exif", __func__, mCameraId);
 		ret = -EINVAL;
 		goto unlock;
 	}
-	ALOGDV("Exif size:%d", exifSize);
+	ALOGDV("[%s:%d] Exif size:%d", __func__, mCameraId, exifSize);
 
 	int skipSOI;
 	int jpegSize;
@@ -117,7 +118,7 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, ex
 			src->height, srcY.ystride, srcY.cstride, 100,
 			NX_PIXFORMAT_YUV420);
 	if (jpegSize <= 0) {
-		ALOGE("Failed to NX_JpegEncoding!!!");
+		ALOGE("[%s:%d] Failed to NX_JpegEncoding!!!", __func__, mCameraId);
 		ret = -EINVAL;
 		goto unlock;
 	}
@@ -135,23 +136,25 @@ int StreamManager::jpegEncoding(private_handle_t *dst, private_handle_t *src, ex
 					sizeof(camera3_jpeg_blob_t)]);
 	jpegBlob->jpeg_size = jpegSize + exifSize;
 	jpegBlob->jpeg_blob_id = CAMERA3_JPEG_BLOB_ID;
-	ALOGDV("capture success: jpegSize(%d), totalSize(%d)",
-	jpegSize, jpegBlob->jpeg_size);
+	ALOGDV("[%s:%d] capture success: jpegSize(%d), totalSize(%d)",
+			__func__, mCameraId, jpegSize, jpegBlob->jpeg_size);
 	ret = 0;
 
 unlock:
 	ret = module->unlock(module, dst);
 	if (ret) {
-		ALOGE("Failed to gralloc unlock for dst:%d\n", ret);
+		ALOGE("[%s:%d] Failed to gralloc unlock for dst:%d\n",
+				__func__, mCameraId, ret);
 		return ret;
 	}
 	ret = module->unlock(module, src);
 	if (ret) {
-		ALOGE("Failed to gralloc unlock for src:%d\n", ret);
+		ALOGE("[%s:%d] Failed to gralloc unlock for src:%d\n",
+				__func__, mCameraId, ret);
 		return ret;
 	}
 
-	ALOGDD("end jpegEncoding");
+	ALOGDD("[%s:%d] end jpegEncoding", __func__, mCameraId);
 	return ret;
 }
 
@@ -172,8 +175,9 @@ int StreamManager::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 		cropY = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[1];
 		cropWidth = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[2];
 		cropHeight = meta.find(ANDROID_SCALER_CROP_REGION).data.i32[3];
-		ALOGDV("CROP: left:%d, top:%d, width:%d, height:%d",
-			   cropX, cropY, cropWidth, cropHeight);
+		ALOGDV("[%s:%d] CROP: left:%d, top:%d, width:%d, height:%d",
+				__func__, mCameraId,
+				cropX, cropY, cropWidth, cropHeight);
 	} else {
 		cropX = 0;
 		cropY = 0;
@@ -181,10 +185,11 @@ int StreamManager::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 		cropHeight = srcBuf->height;
 	}
 	if (mScaler < 0) {
-		ALOGE("scaler fd");
+		ALOGE("[%s:%d] scaler fd", __func__, mCameraId);
 		return -ENODEV;
 	}
-	ALOGDI("scaling start, src %d * %d, dst %d * %d",srcBuf->width, srcBuf->height,
+	ALOGDI("[%s:%d] scaling start, src %d * %d, dst %d * %d",
+			__func__, mCameraId, srcBuf->width, srcBuf->height,
 		dstBuf->width, dstBuf->height);
 
 	hw_module_t const *pmodule = NULL;
@@ -196,14 +201,16 @@ int StreamManager::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 	ret = module->lock_ycbcr(module, srcBuf, PROT_READ | PROT_WRITE, 0, 9,
 				 srcBuf->width, srcBuf->height, &src);
 	if (ret) {
-		ALOGE("Failed to lock_ycbcr for the buf - %d", srcBuf->share_fd);
+		ALOGE("[%s:%d] Failed to lock_ycbcr for the buf - %d",
+				__func__, mCameraId, srcBuf->share_fd);
 		goto exit;
 	}
 
 	ret = module->lock_ycbcr(module, dstBuf, PROT_READ | PROT_WRITE, 0, 9,
 				 dstBuf->width, dstBuf->height, &dst);
 	if (ret) {
-		ALOGE("Failed to lock_ycbcr for the buf - %d", dstBuf->share_fd);
+		ALOGE("[%s:%d] Failed to lock_ycbcr for the buf - %d",
+				__func__, mCameraId, dstBuf->share_fd);
 		goto exit;
 	}
 
@@ -238,7 +245,8 @@ int StreamManager::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 
 	ret = nx_scaler_run(mScaler, &ctx);
 	if (ret < 0) {
-		ALOGE("[%s] Failed to scaler set & run ioctl", __func__);
+		ALOGE("[%s:%d] Failed to scaler set & run ioctl", __func__,
+				mCameraId);
 		goto unlock;
 	}
 
@@ -246,16 +254,16 @@ unlock:
 	if (module ) {
 		ret = module->unlock(module, srcBuf);
 		if (ret)
-			ALOGE("[%s] Failed to gralloc unlock for srcBuf:%d",
-			      __func__, ret);
+			ALOGE("[%s:%d] Failed to gralloc unlock for srcBuf:%d",
+			      __func__, mCameraId, ret);
 		ret = module->unlock(module, dstBuf);
 		if (ret)
-			ALOGE("[%s] Failed to gralloc unlock for dstBuf:%d",
-			      __func__, ret);
+			ALOGE("[%s:%d] Failed to gralloc unlock for dstBuf:%d",
+			      __func__, mCameraId, ret);
 	}
 
 exit:
-	ALOGDV("[%s] scaling done", __func__);
+	ALOGDV("[%s:%d] scaling done", __func__, mCameraId);
 	meta.clear();
 	return ret;
 }
@@ -272,28 +280,29 @@ int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)
 	int ret = module->lock_ycbcr(module, dst, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
 			dst->width, dst->height, &dstY);
 	if (ret) {
-		ALOGE("Failed to lock for dst");
+		ALOGE("[%s:%d] Failed to lock for dst", __func__, mCameraId);
 		return ret;
 	}
 
 	ret = module->lock_ycbcr(module, src, GRALLOC_USAGE_SW_READ_MASK, 0, 0,
 			src->width, src->height, &srcY);
 	if (ret) {
-		ALOGE("Failed to lock for src");
+		ALOGE("[%s:%d] Failed to lock for src", __func__, mCameraId);
 		return ret;
 	}
 
 #ifdef VERIFY_FRIST_FRAME
 	memset(dstY.y, 0x88, dst->size);
 #endif
-	ALOGDV("src: %p(%d) --> dst: %p(%d)", srcY.y, src->size,
+	ALOGDV("[%s:%d] src: %p(%d) --> dst: %p(%d)", __func__, mCameraId,
+			srcY.y, src->size,
 			dstY.y, dst->size);
 	if ((src->width == dst->width) && (src->height == dst->height)) {
 		if ((srcY.cstride == dstY.cstride) && (srcY.cstride == dstY.cstride)) {
-			ALOGD("====> memcpy");
 			memcpy(dstY.y, srcY.y, src->size);
 		} else {
-			ALOGDD("src and dst buffer has a different alingment");
+			ALOGDD("[%s:%d] src and dst buffer has a different alingment",
+					__func__, mCameraId);
 			for (int i = 0; i < src->height; i++) {
 				unsigned long srcOffset = i * srcY.ystride;
 				unsigned long srcCbCrOffset = (i/2) * srcY.cstride;
@@ -334,12 +343,14 @@ int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)
 #endif
 		ret = module->unlock(module, dst);
 		if (ret) {
-			ALOGE("Failed to gralloc unlock for dst:%d\n", ret);
+			ALOGE("[%s:%d] Failed to gralloc unlock for dst:%d\n",
+					__func__, mCameraId, ret);
 			return ret;
 		}
 		ret = module->unlock(module, src);
 		if (ret) {
-			ALOGE("Failed to gralloc unlock for src:%d\n", ret);
+			ALOGE("[%s:%d] Failed to gralloc unlock for src:%d\n",
+					__func__, mCameraId, ret);
 			return ret;
 		}
 		scaling(dst, src, 0);
@@ -347,12 +358,14 @@ int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)
 	}
 	ret = module->unlock(module, dst);
 	if (ret) {
-		ALOGE("Failed to gralloc unlock for dst:%d\n", ret);
+		ALOGE("[%s:%d] Failed to gralloc unlock for dst:%d\n",
+				__func__, mCameraId, ret);
 		return ret;
 	}
 	ret = module->unlock(module, src);
 	if (ret) {
-		ALOGE("Failed to gralloc unlock for src:%d\n", ret);
+		ALOGE("[%s:%d] Failed to gralloc unlock for src:%d\n",
+				__func__, mCameraId, ret);
 		return ret;
 	}
 
@@ -361,15 +374,16 @@ int StreamManager::copyBuffer(private_handle_t *dst, private_handle_t *src)
 
 void StreamManager::setCaptureResult(uint32_t type, NXCamera3Buffer *buf)
 {
-	ALOGDV("[%s] get result from %d frame, type:%d", __func__,
-			buf->getFrameNumber(), type);
+	ALOGDV("[%s:%d] get result from %d frame, type:%d", __func__,
+			mCameraId, buf->getFrameNumber(), type);
 
 	if (type >= NX_MAX_STREAM)
-		ALOGE("Invalied type");
+		ALOGE("[%s:%d] Invalied type", __func__, mCameraId);
 	else {
 		mResultQ[type].queue(buf);
 		if (!isRunning()) {
-			ALOGDV("START StreamManager Thread");
+			ALOGDV("[%s:%d] START StreamManager Thread", __func__,
+					mCameraId);
 			run("StreamManagerThread");
 		}
 	}
@@ -385,19 +399,21 @@ void StreamManager::getCaptureResult(const struct nx_camera3_callback_ops *ops,
 
 int StreamManager::configureStreams(camera3_stream_configuration_t *stream_list)
 {
-	ALOGDD("[%s] operation mode=%d", __func__, stream_list->operation_mode);
+	ALOGDD("[%s:%d] operation mode=%d", __func__, mCameraId,
+			stream_list->operation_mode);
 
 	for (uint32_t i = 0; i < stream_list->num_streams; i++) {
 		camera3_stream_t *stream = stream_list->streams[i];
-		ALOGDD("[%zu] format:0x%x, width:%d, height:%d, usage:0x%x",
-				i, stream->format, stream->width, stream->height, stream->usage);
+		ALOGDD("[%d:%zu] format:0x%x, width:%d, height:%d, usage:0x%x",
+				mCameraId, i, stream->format, stream->width,
+				stream->height, stream->usage);
 		mStream[i] = new Stream(mCameraId, mFd[0], mScaler, mAllocator, &mResultCb, stream, i);
 		if (mStream[i] == NULL) {
-			ALOGE("Failed to create stream:%d", i);
+			ALOGE("[%s:%d] Failed to create stream:%d", __func__, mCameraId, i);
 			return -EINVAL;
 		}
 		stream->priv = mStream[i]->getStream();
-		ALOGDD("[%zu] Mode:%d", i, mStream[i]->getMode());
+		ALOGDD("[%d: %zu] Mode:%d", mCameraId, i, mStream[i]->getMode());
 	}
 
 	return NO_ERROR;
@@ -413,7 +429,7 @@ int StreamManager::getRunningStreamsCount(void)
 				(!mStream[j]->getSkipFlag()))
 				count++;
 	}
-	ALOGDV("[%s] running streams count:%d", __func__, count);
+	ALOGDV("[%s:%d] running streams count:%d", __func__, mCameraId, count);
 	return count;
 }
 
@@ -425,10 +441,10 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 
 	stream = (Stream *)s->priv;
 	if (stream == NULL) {
-		ALOGE("Failed to get stream from buffer");
+		ALOGE("[%s:%d] Failed to get stream from buffer", __func__, mCameraId);
 		return -EINVAL;
 	}
-	ALOGDV("[%s] getRunningStreamsCount:%d", __func__, count);
+	ALOGDV("[%s:%d] getRunningStreamsCount:%d", __func__, mCameraId, count);
 
 	if (!count) {
 		stream->setSkipFlag(skip);
@@ -456,7 +472,8 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 			}
 		}
 		count = getRunningStreamsCount();
-		ALOGDV("[%s] get current RunningStreamsCount:%d", __func__, count);
+		ALOGDV("[%s:%d] get current RunningStreamsCount:%d", __func__,
+				mCameraId, count);
 		if (mFd[count] < 0)
 			skip = true;
 		else
@@ -474,7 +491,8 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 	return 0;
 
 fail:
-	ALOGE("Failed to run stream[%d] thread", stream->getMode());
+	ALOGE("[%s:%d] Failed to run stream[%d] thread", __func__,
+			mCameraId, stream->getMode());
 	return -EINVAL;
 }
 
@@ -488,58 +506,63 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 	if (r->settings != NULL) {
 		setting = r->settings;
 	} else {
-		ALOGDV("[%s] metadata is null", __func__);
+		ALOGDV("[%s:%d] metadata is null", __func__, mCameraId);
 		setting = mMeta;
 	}
 
-	ALOGDD("[%s] frame number:%d, num_output_buffers:%d", __func__,
-			r->frame_number, r->num_output_buffers);
+	ALOGDD("[%s:%d] frame number:%d, num_output_buffers:%d", __func__,
+			mCameraId, r->frame_number, r->num_output_buffers);
 
 	if (setting.exists(ANDROID_REQUEST_ID)) {
-		ALOGDI("[%s] requestID:%d", __func__,
+		ALOGDI("[%s:%d] requestID:%d", __func__, mCameraId,
 				setting.find(ANDROID_REQUEST_ID).data.i32[0]);
 		if (mPipeLineDepth == MAX_BUFFER_COUNT)
 			mPipeLineDepth = 1;
 		else
 			mPipeLineDepth++;
 	} else
-		ALOGDI("===> no request id");
+		ALOGDI("[%s:%d] ===> no request id", __func__, mCameraId);
 	meta = setting.release();
 	if (r->input_buffer != NULL) {
 		const camera3_stream_buffer_t *b = r->input_buffer;
 		if ((b == NULL) || (b->status)) {
-			ALOGE("input buffer or status is not valid to use:%d", b->status);
+			ALOGE("[%s:%d] input buffer or status is not valid to use:%d",
+					__func__, mCameraId, b->status);
 			return -EINVAL;
 		}
 		private_handle_t *ph = (private_handle_t *)*b->buffer;
 		camera3_stream_t *s =b->stream;
-		ALOGDD("[Input] frmaeNumber:%d, format:0x%x, width:%d, height:%d, size:%d",
-				r->frame_number, s->format, s->width, s->height, ph->size);
+		ALOGDD("[%s:%d] [Input] frmaeNumber:%d, format:0x%x, width:%d, height:%d, size:%d",
+				__func__, mCameraId, r->frame_number, s->format, s->width,
+				s->height, ph->size);
 	}
 	for (uint32_t i = 0; i < r->num_output_buffers; i++) {
 		const camera3_stream_buffer_t *b = &r->output_buffers[i];
 
 		if ((b == NULL) || (b->status)) {
-			ALOGE("buffer or status is not valid to use:%d", b->status);
+			ALOGE("[%s:%d] buffer or status is not valid to use:%d",
+					__func__, mCameraId, b->status);
 			return -EINVAL;
 		}
 
 		private_handle_t *ph = (private_handle_t *)*b->buffer;
 		if (ph->share_fd < 0) {
-			ALOGE("Invalid Buffer --> no fd");
+			ALOGE("[%s:%d] Invalid Buffer --> no fd", __func__, mCameraId);
 			return -EINVAL;
 		}
-		ALOGDI("[Output] frmaeNumber:%d, format:0x%x, width:%d, height:%d, size:%d",
-				r->frame_number, ph->format, ph->width, ph->height, ph->size);
+		ALOGDI("[%s:%d] [Output] frmaeNumber:%d, format:0x%x, width:%d, height:%d, size:%d",
+				__func__, mCameraId, r->frame_number, ph->format,
+				ph->width, ph->height, ph->size);
 		Stream *s = (Stream *)(b->stream->priv);
 		if (s == NULL) {
-			ALOGE("Failed to get stream for this buffer");
+			ALOGE("[%s:%d] Failed to get stream for this buffer",
+					__func__, mCameraId);
 			return -EINVAL;
 		}
 		ret = s->registerBuffer(r->frame_number, b, meta);
 		if (ret) {
-			ALOGE("Failed to register Buffer for buffer:%d",
-					ret);
+			ALOGE("[%s:%d] Failed to register Buffer for buffer:%d",
+					__func__, mCameraId, ret);
 			return ret;
 		}
 		if (!s->isRunning()) {
@@ -551,7 +574,7 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 
 	nx_camera_request_t *request = (nx_camera_request_t*)malloc(sizeof(nx_camera_request_t));
 	if (!request) {
-		ALOGE("Failed to malloc for request");
+		ALOGE("[%s:%d] Failed to malloc for request", __func__, mCameraId);
 		ret = -ENOMEM;
 	}
 	request->frame_number = r->frame_number;
@@ -569,17 +592,17 @@ int StreamManager::stopStream()
 {
 	int ret = NO_ERROR, i;
 
-	ALOGDD("[%s] Enter", __func__);
+	ALOGDD("[%s:%d] Enter", __func__, mCameraId);
 	for (i = 0; i < NX_MAX_STREAM; i++) {
 		if ((mStream[i] != NULL) && (mStream[i]->isRunning()))
 			mStream[i]->stopStreaming();
 	}
-	ALOGDV("[%s] mRequestQ:%d, mRQ:%d, mResultQ[%d:%d:%d:%d]",
-			__func__, mRequestQ.size(), mRQ.size(), mResultQ[0].size(),
+	ALOGDV("[%s:%d] mRequestQ:%d, mRQ:%d, mResultQ[%d:%d:%d:%d]",
+			__func__, mCameraId, mRequestQ.size(), mRQ.size(), mResultQ[0].size(),
 			mResultQ[1].size(), mResultQ[2].size(), mResultQ[3].size());
 
 	while (!mRequestQ.isEmpty() || !mRQ.isEmpty()) {
-		ALOGDV("Wait buffer drained");
+		ALOGDV("[%s:%d] Wait buffer drained", __func__, mCameraId);
 		usleep(1000);
 	}
 
@@ -595,11 +618,11 @@ int StreamManager::stopStream()
 		firstFrame = NULL;
 	}
 #endif
-	ALOGDD("[%s]", __func__);
+	ALOGDD("[%s:%d]", __func__, mCameraId);
 	if (isRunning()) {
-		ALOGDV("requestExitAndWait Enter", __func__);
+		ALOGDV("[%s:%d] requestExitAndWait Enter", __func__, mCameraId);
 		requestExitAndWait();
-		ALOGDV("requestExitAndWait Exit", __func__);
+		ALOGDV("[%s:%d] requestExitAndWait Exit", __func__, mCameraId);
 	}
 	return ret;
 }
@@ -629,7 +652,8 @@ int StreamManager::sendResult(void)
 
 	nx_camera_request_t *request = mRequestQ.getHead();
 	if (!request) {
-		ALOGE("Failed to get request from Queue");
+		ALOGE("[%s:%d] Failed to get request from Queue",
+				__func__, mCameraId);
 		return -EINVAL;
 	}
 
@@ -663,7 +687,7 @@ int StreamManager::sendResult(void)
 			output_buffers[i].acquire_fence = -1;
 			output_buffers[i].status = 0;
 		} else {
-			ALOGE("Failed to get buffer form RQ");
+			ALOGE("[%s:%d] Failed to get buffer form RQ", __func__, mCameraId);
 			break;
 		}
 
@@ -678,10 +702,11 @@ int StreamManager::sendResult(void)
 					(exif == NULL)) {
 					exif = new exif_attribute_t();
 					if (!exif)
-						ALOGE("[%s] Failed to make exif", __func__);
+						ALOGE("[%s:%d] Failed to make exif",
+								__func__, mCameraId);
 			}
 		} else
-			ALOGDV("setream is null\n");
+			ALOGDV("[%s:%d] setream is null\n", __func__, mCameraId);
 	}
 #ifdef VERIFY_FRIST_FRAME
 	if (result.frame_number == 2) {
@@ -689,17 +714,18 @@ int StreamManager::sendResult(void)
 		if (firstFrame == NULL) {
 			allocBuffer(buffer->width, buffer->height, buffer->format, &firstFrame);
 			if (firstFrame == NULL)
-				ALOGE("Failed to alloc a new buffer");
+				ALOGE("[%s:%d] Failed to alloc a new buffer",
+						__func__, mCameraId);
 		}
 		if (firstFrame) {
-			ALOGDD("========> save first frame");
+			ALOGDD("[%s:%d] ========> save first frame", __func__, mCameraId);
 			copyBuffer((private_handle_t*)firstFrame, buffer);
 		}
 	}
 	if (result.num_output_buffers == 2 && firstFrame) {
 		private_handle_t *buffer = NULL;
 		camera3_stream_t *s = NULL;
-		ALOGDD("=========> copy first frame");
+		ALOGDD("[%s:%d] =========> copy first frame", __func__, mCameraId);
 		s = output_buffers[0].stream;
 		if (s->usage & GRALLOC_USAGE_HW_TEXTURE)
 			buffer = (private_handle_t *)*output_buffers[1].buffer;
@@ -729,9 +755,10 @@ int StreamManager::sendResult(void)
 				if (stream->getFormat() == HAL_PIXEL_FORMAT_BLOB) {
 					if ((stream->getWidth() != (uint32_t)copy->width) ||
 						(stream->getHeight() != (uint32_t)copy->height)) {
-						ALOGE("[%s] Resolution is different", __func__);
+						ALOGE("[%s:%d] Resolution is different", __func__,
+								mCameraId);
 					} else {
-						ALOGD("[%s] jpegEncoding", __func__);
+						ALOGD("[%s:%d] jpegEncoding", __func__, mCameraId);
 						uint32_t crop[4] = {0, 0};
 						if (stream->calScalingFactor(request->meta, crop))
 							exif->setCropResolution(crop[0], crop[1], crop[2], crop[3]);
@@ -747,8 +774,8 @@ int StreamManager::sendResult(void)
 	result.output_buffers = output_buffers;
 	result.partial_result = 1;
 	result.input_buffer = request->input_buffer;
-	ALOGDI("[%s] frame_number:%d, num_output_buffers:%d", __func__,
-			result.frame_number, result.num_output_buffers);
+	ALOGDI("[%s:%d] frame_number:%d, num_output_buffers:%d", __func__,
+			mCameraId, result.frame_number, result.num_output_buffers);
 
 	mCb->process_capture_result(mCb, &result);
 	request = mRequestQ.dequeue();
@@ -757,7 +784,7 @@ int StreamManager::sendResult(void)
 			free(request->meta);
 		free(request);
 	}
-	ALOGDV("[%s] Exit", __func__);
+	ALOGDV("[%s:%d] Exit", __func__, mCameraId);
 	free(meta);
 	return 0;
 }
@@ -766,19 +793,19 @@ void StreamManager::drainBuffer()
 {
 	int ret = NO_ERROR;
 
-	ALOGDV("[%s] Enter", __func__);
+	ALOGDV("[%s:%d] Enter", __func__, mCameraId);
 
 	while (!mRequestQ.isEmpty())
 		sendResult();
 
-	ALOGDV("[%s] Exit", __func__);
+	ALOGDV("[%s:%d] Exit", __func__, mCameraId);
 }
 
 status_t StreamManager::readyToRun()
 {
 	int ret = NO_ERROR;
 
-	ALOGDV("[%s]", __func__);
+	ALOGDV("[%s:%d]", __func__, mCameraId);
 	return ret;
 }
 
@@ -788,8 +815,8 @@ bool StreamManager::threadLoop()
 	{
 		nx_camera_request_t *request = mRequestQ.getHead();
 		if (!request) {
-			ALOGE("[%s] Failed to get request from Queue",
-				__func__);
+			ALOGE("[%s:%d] Failed to get request from Queue",
+				__func__, mCameraId);
 		return false;
 	}
 	uint32_t frame_number = request->frame_number;
@@ -802,14 +829,16 @@ bool StreamManager::threadLoop()
 			NXCamera3Buffer *buf =
 			mResultQ[i].getHead();
 			if ((buf) && (buf->getFrameNumber() == frame_number)) {
-				ALOGDV("got a buffer for the frame_buffer:%d from %d",
-						frame_number, i);
+				ALOGDV("[%s:%d] got a buffer for the frame_buffer:%d from %d",
+						__func__, mCameraId, frame_number, i);
 				buf = mResultQ[i].dequeue();
 				mRQ.queue(buf);
 				num_buffers--;
-				ALOGDV("left buffers:%d", num_buffers);
+				ALOGDV("[%s:%d] left buffers:%d", __func__, mCameraId,
+						num_buffers);
 				if (num_buffers == 0) {
-					ALOGDV("got all:%d buffers", request->num_output_buffers);
+					ALOGDV("[%s:%d] got all:%d buffers", __func__, mCameraId,
+							request->num_output_buffers);
 					sendResult();
 					mNumBuffers = num_buffers;
 					break;

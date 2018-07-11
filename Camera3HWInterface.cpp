@@ -157,7 +157,8 @@ static int initialize(const struct camera3_device *device,
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
-		ALOGE("[%s] Camera3HW Interface is not initialized", __func__);
+		ALOGE("[%s] Camera3HW Interface is not initialized",
+				__func__);
 		return -ENODEV;
 	}
 	return hw->initialize(callback_ops);
@@ -172,7 +173,8 @@ static int configureStreams(const struct camera3_device *device,
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
-		ALOGE("[%s] Camera3HW Interface is not initialized", __func__);
+		ALOGE("[%s] Camera3HW Interface is not initialized",
+				__func__);
 		return -ENODEV;
 	}
 	return hw->configureStreams(stream_list);
@@ -184,7 +186,8 @@ constructDefaultRequestSettings(const struct camera3_device *device,
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
-		ALOGE("[%s] Camera3HW Interface is not initialized", __func__);
+		ALOGE("[%s] Camera3HW Interface is not initialized",
+				__func__);
 		return NULL;
 	}
 	return hw->constructDefaultRequestSettings(type);
@@ -195,7 +198,8 @@ static int processCaptureRequest(const struct camera3_device *device,
 {
 	Camera3HWInterface *hw = getPriv(device);
 	if (!hw) {
-		ALOGE("[%s] Camera3HW Interface is not initialized", __func__);
+		ALOGE("[%s] Camera3HW Interface is not initialized",
+				__func__);
 		return -ENODEV;
 	}
 	return hw->processCaptureRequest(request);
@@ -205,7 +209,8 @@ static int flush(const struct camera3_device *device)
 {
 	Camera3HWInterface *hw  = getPriv(device);
 	if (!hw) {
-		ALOGE("[%s] Camera3HW Interface is not initialized", __func__);
+		ALOGE("[%s] Camera3HW Interface is not initialized",
+				__func__);
 		return -ENODEV;
 	}
 	return hw->flush();
@@ -227,6 +232,7 @@ extern "C" {
 
 static int cameraClose(struct hw_device_t* device);
 
+static alloc_device_t *mAllocator = NULL;
 Camera3HWInterface::Camera3HWInterface(int cameraId)
 	: mCameraId(cameraId),
 	mCallbacks(NULL),
@@ -251,19 +257,18 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 
 Camera3HWInterface::~Camera3HWInterface(void)
 {
-	ALOGDI("[%s] destroyed", __func__);
+	ALOGDI("[%s:%d] destroyed", __func__, mCameraId);
 }
 
-static alloc_device_t *mAllocator = NULL;
 int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 {
 	int fd;
 
-	ALOGD("[%s] mCameraId:%d, buffer:%d", __func__, mCameraId, MAX_BUFFER_COUNT);
+	ALOGD("[%s:%d] buffer:%d", __func__, mCameraId, MAX_BUFFER_COUNT);
 
 	fd = open(gCameraInfo[mCameraId].dev_path, O_RDWR);
 	if (fd < 0) {
-		ALOGE("Failed to open %s camera :%d",
+		ALOGE("[%s:%d] Failed to open %s camera :%d", __func__, mCameraId,
 				(gCameraInfo[mCameraId].type) ? "Front"  : "Back", fd);
 		return -ENODEV;
 	}
@@ -271,7 +276,7 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 	if (gCameraInfo[mCameraId].max_handles > 1) {
 		fd = open(gCameraInfo[mCameraId].subdev_path, O_RDWR);
 		if (fd < 0) {
-			ALOGE("Failed to open %s camera :%d",
+			ALOGE("[%s:%d] Failed to open %s camera :%d", __func__, mCameraId,
 					(gCameraInfo[mCameraId].type) ? "Front"  : "Back", fd);
 			return -ENODEV;
 		}
@@ -283,11 +288,12 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 #if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 	fd = scaler_open();
 	if (fd < 0) {
-		ALOGE("[%s] Failed to open scaler", __func__);
+		ALOGE("[%s:%d] Failed to open scaler", __func__, mCameraId);
 		return -ENODEV;
 	}
 	mScaler = fd;
 #endif
+
 	if (mAllocator == NULL) {
 		hw_device_t *dev = NULL;
 		alloc_device_t *device = NULL;
@@ -297,7 +303,7 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		module = reinterpret_cast<gralloc_module_t const *>(pmodule);
 		module->common.methods->open(pmodule, GRALLOC_HARDWARE_GPU0, &dev);
 		if (dev == NULL) {
-			ALOGE("Failed to open alloc device");
+			ALOGE("[%s:%d] Failed to open alloc device", __func__, mCameraId);
 			return -ENODEV;
 		}
 		device = reinterpret_cast<alloc_device_t *>(dev);
@@ -309,26 +315,26 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_list)
 {
 	if ((stream_list == NULL) || (stream_list->streams == NULL)) {
-		ALOGE("[%s] stream configurationg is NULL", __func__);
+		ALOGE("[%s:%d] stream configurationg is NULL", __func__, mCameraId);
 		return -EINVAL;
 	}
 
-	ALOGDD("[%s] operation_mode:%d, num_streams:%d", __func__,
+	ALOGDD("[%s:%d] operation_mode:%d, num_streams:%d", __func__, mCameraId,
 			stream_list->operation_mode, stream_list->num_streams);
 	for (size_t i = 0; i < stream_list->num_streams; i++) {
 		camera3_stream_t *new_stream = stream_list->streams[i];
 
 		if (new_stream->rotation) {
-			ALOGE("[%s] rotation is not supported:%d", __func__,
-					new_stream->rotation);
+			ALOGE("[%s:%d] rotation is not supported:%d", __func__,
+					mCameraId, new_stream->rotation);
 			return -EINVAL;
 		}
 
 		if ((new_stream->stream_type == CAMERA3_STREAM_OUTPUT) ||
 				(new_stream->stream_type == CAMERA3_STREAM_BIDIRECTIONAL)) {
-			ALOGDD("[%zu] format:0x%x, width:%d, height:%d, max buffers:%d, usage:0x%x",
-					i, new_stream->format, new_stream->width, new_stream->height,
-					new_stream->max_buffers,
+			ALOGDD("[%d:%zu] format:0x%x, width:%d, height:%d, max buffers:%d, usage:0x%x",
+					mCameraId, i, new_stream->format, new_stream->width,
+					new_stream->height, new_stream->max_buffers,
 					new_stream->usage);
 			if (new_stream->format == HAL_PIXEL_FORMAT_BLOB)
 				new_stream->max_buffers = 1;
@@ -337,24 +343,23 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 				new_stream->max_buffers = MAX_BUFFER_COUNT;
 			}
 		}
-		ALOGDD("[%s] stream type = %d, max_buffer = %d, usage = 0x%x",
-				__func__, new_stream->stream_type, new_stream->max_buffers,
-				new_stream->usage);
+		ALOGDD("[%s:%d] stream type = %d, max_buffer = %d, usage = 0x%x",
+				__func__, mCameraId, new_stream->stream_type,
+				new_stream->max_buffers, new_stream->usage);
 	}
 
 	if (mStreamManager != NULL) {
-		ALOGDD("==================================================");
 		mStreamManager->stopStream();
 		mStreamManager.clear();
 		mStreamManager = NULL;
 	}
 
 	if (mStreamManager == NULL) {
-		ALOGDD("new Stream");
-		ALOGDD("==================================================");
+		ALOGDD("[%s:%d] new Stream", __func__, mCameraId);
 		mStreamManager = new StreamManager(mCameraId, mHandles, mScaler, mAllocator, mCallbacks);
 		if (mStreamManager == NULL) {
-			ALOGE("Failed to construct StreamManager for preview");
+			ALOGE("[%s:%d] Failed to construct StreamManager for preview",
+					__func__, mCameraId);
 			return -ENOMEM;
 		}
 		mStreamManager->configureStreams(stream_list);
@@ -365,10 +370,11 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 const camera_metadata_t*
 Camera3HWInterface::constructDefaultRequestSettings(int type)
 {
-	ALOGDD("[%s] type = %d", __func__, type);
+	ALOGDD("[%s:%d] type = %d", __func__, mCameraId, type);
 
 	if (mRequestMetadata[type-1] != NULL) {
-		ALOGDD("mRequestMetadata for %d is already exist", type);
+		ALOGDD("[%s:%d] mRequestMetadata for %d is already exist",
+				__func__, mCameraId, type);
 		return mRequestMetadata[type-1];
 	}
 
@@ -396,7 +402,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 
 	switch (type) {
 		case CAMERA3_TEMPLATE_PREVIEW:
-			ALOGDD("[%s] CAMERA3_TEMPLATE_PREVIEW:%d", __func__, type);
+			ALOGDD("[%s:%d] CAMERA3_TEMPLATE_PREVIEW:%d", __func__, mCameraId, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
 			antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
@@ -405,7 +411,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_STILL_CAPTURE:
-			ALOGDD("[%s] CAMERA3_TEMPLATE_STILL_CAPTURE:%d", __func__, type);
+			ALOGDD("[%s:%d] CAMERA3_TEMPLATE_STILL_CAPTURE:%d", __func__, mCameraId, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY;
@@ -413,7 +419,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_VIDEO_RECORD:
-			ALOGDD("[%s] CAMERA3_TEMPLATE_VIDEO_RECORD:%d", __func__, type);
+			ALOGDD("[%s:%d] CAMERA3_TEMPLATE_VIDEO_RECORD:%d", __func__, mCameraId, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
@@ -421,7 +427,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
-			ALOGDD("[%s] CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:%d", __func__, type);
+			ALOGDD("[%s:%d] CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:%d", __func__, mCameraId, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
@@ -429,7 +435,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
-			ALOGDD("[%s] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:%d", __func__, type);
+			ALOGDD("[%s:%d] CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:%d", __func__, mCameraId, type);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG;
 			focusMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
 			cacMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_FAST;
@@ -437,7 +443,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			break;
 
 		case CAMERA3_TEMPLATE_MANUAL:
-			ALOGDD("[%s] CAMERA3_TEMPLATE_MANUAL:%d", __func__, type);
+			ALOGDD("[%s:%d] CAMERA3_TEMPLATE_MANUAL:%d", __func__, mCameraId, type);
 			controlIntent =ANDROID_CONTROL_CAPTURE_INTENT_MANUAL;
 			//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
 			controlMode = ANDROID_CONTROL_MODE_OFF;
@@ -448,7 +454,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 			optStabMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_OFF;
 			break;
 		default:
-			ALOGDD("[%s] not supported", __func__);
+			ALOGDD("[%s:%d] not supported", __func__, mCameraId);
 			controlIntent = ANDROID_CONTROL_CAPTURE_INTENT_CUSTOM;
 			//awbMode = ANDROID_CONTROL_AWB_MODE_OFF;
 			controlMode = ANDROID_CONTROL_MODE_OFF;
@@ -526,7 +532,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	float default_focal_length = 0;
 	if (meta.exists(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS))
 		default_focal_length = meta.find(ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS).data.f[0];
-	ALOGDD("ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS:%f", default_focal_length);
+	ALOGDD("[%d] ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS:%f", mCameraId, default_focal_length);
 	metaData.update(ANDROID_LENS_FOCAL_LENGTH, &default_focal_length, 1);
 
 	/* Fps range */
@@ -546,7 +552,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 				meta.find(ANDROID_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).data.i32[1];
 		}
 	}
-	ALOGDD("available_fps_ranges min:%d, max:%d", available_fps_ranges[0], available_fps_ranges[1]);
+	ALOGDD("[%d] available_fps_ranges min:%d, max:%d", mCameraId, available_fps_ranges[0], available_fps_ranges[1]);
 	metaData.update(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, available_fps_ranges, 2);
 	/*scaler crop region*/
 	int32_t sizes[4] = {0, 0, 0, 0};
@@ -556,8 +562,8 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 		sizes[2] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[2];
 		sizes[3] = meta.find(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[3];
 	}
-	ALOGDD("ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE-%d:%d:%d:%d",
-			sizes[0], sizes[1], sizes[2], sizes[3]);
+	ALOGDD("[%d] ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE-%d:%d:%d:%d",
+			mCameraId, sizes[0], sizes[1], sizes[2], sizes[3]);
 	metaData.update(ANDROID_SCALER_CROP_REGION, sizes, 4);
 
 	/* frame duration */
@@ -588,63 +594,72 @@ int Camera3HWInterface::validateCaptureRequest(camera3_capture_request_t * reque
 	const camera3_stream_buffer_t *buf;
 
 	if (request == NULL) {
-		ALOGE("[%s] capture request is NULL", __func__);
+		ALOGE("[%s:%d] capture request is NULL", __func__, mCameraId);
 		return ret;
 	}
 
 	if ((firstRequest) && (request->settings == NULL)) {
-		ALOGE("[%s] meta info can't be NULL for the first request",
-				__func__);
+		ALOGE("[%s:%d] meta info can't be NULL for the first request",
+				__func__, mCameraId);
 		return ret;
 	}
 
 	if (request->input_buffer != NULL) {
 		buf = request->input_buffer;
 		if (buf->release_fence != -1) {
-			ALOGE("[Input] release fence is not -1");
+			ALOGE("[%s:%d] [Input] release fence is not -1",
+					__func__, mCameraId);
 			return ret;
 		}
 		if (buf->status != CAMERA3_BUFFER_STATUS_OK) {
-			ALOGE("[Input] status is not OK\n");
+			ALOGE("[%s:%d] [Input] status is not OK", __func__,
+					mCameraId);
 			sendResult();
 			return ret;
 		}
 		if (buf->buffer == NULL) {
-			ALOGE("[Input] buffer handle is NULL\n");
+			ALOGE("[%s:%d] [Input] buffer handle is NULL",
+					__func__, mCameraId);
 			return ret;
 		}
 		if (*(buf->buffer) == NULL) {
-			ALOGE("[Input] private handle is NULL\n");
+			ALOGE("[%s:%d] [Input] private handle is NULL",
+					__func__, mCameraId);
 			return ret;
 		}
 		if (buf->stream->format == HAL_PIXEL_FORMAT_BLOB) {
-			ALOGE("[Input] invalid input buffer format");
+			ALOGE("[%s:%d] [Input] invalid input buffer format",
+					__func__, mCameraId);
 			return ret;
 		}
 	}
 	if ((request->num_output_buffers < 1) ||
 			(request->output_buffers == NULL)) {
-		ALOGE("[%s] output buffer is NULL", __FUNCTION__);
+		ALOGE("[%s:%d] output buffer is NULL", __func__, mCameraId);
 		return ret;
 	}
 
 	for (uint32_t i = 0; i < request->num_output_buffers; i++) {
 		buf = request->output_buffers + i;
 		if (buf->release_fence != -1) {
-			ALOGE("[Output:%d] release fence is not -1", i);
+			ALOGE("[%s:%d] [Output:%d] release fence is not -1",
+					__func__, mCameraId, i);
 			return ret;
 		}
 		if (buf->status != CAMERA3_BUFFER_STATUS_OK) {
-			ALOGE("[Output:%d] status is not OK\n", i);
+			ALOGE("[%s:%d] [Output:%d] status is not OK\n",
+					__func__, mCameraId, i);
 			sendResult();
 			return ret;
 		}
 		if (buf->buffer == NULL) {
-			ALOGE("[Output:%d] buffer handle is NULL\n", i);
+			ALOGE("[%s:%d] [Output:%d] buffer handle is NULL\n",
+					__func__, mCameraId, i);
 			return ret;
 		}
 		if (*(buf->buffer) == NULL) {
-			ALOGE("[Output:%d] private handle is NULL\n", i);
+			ALOGE("[%s:%d] [Output:%d] private handle is NULL\n",
+					__func__, mCameraId, i);
 			return ret;
 		}
 	}
@@ -665,7 +680,8 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 	if (mStreamManager != NULL) {
 		ret = mStreamManager->registerRequests(request);
 		if (ret) {
-			ALOGE("Failed to registerRequest for preview");
+			ALOGE("[%s:%d] Failed to registerRequest for preview",
+					__func__, mCameraId);
 			sendResult();
 			return ret;
 		}
@@ -675,13 +691,13 @@ int Camera3HWInterface::processCaptureRequest(camera3_capture_request_t *request
 
 int Camera3HWInterface::flush()
 {
-	ALOGDD("[%s]", __func__);
+	ALOGDD("[%s:%d]", __func__, mCameraId);
 	return 0;
 }
 
 int Camera3HWInterface::cameraDeviceClose()
 {
-	ALOGDD("[%s]", __func__);
+	ALOGDD("[%s:%d]", __func__, mCameraId);
 	if ((mStreamManager != NULL) && (mStreamManager->isRunning())) {
 		mStreamManager->stopStream();
 		mStreamManager.clear();
