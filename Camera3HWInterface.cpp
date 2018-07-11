@@ -231,7 +231,6 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 	: mCameraId(cameraId),
 	mCallbacks(NULL),
 	mScaler(-1),
-	mAllocator(NULL),
 	mStreamManager(NULL)
 {
 	memset(&mCameraDevice, 0x0, sizeof(camera3_device_t));
@@ -255,6 +254,7 @@ Camera3HWInterface::~Camera3HWInterface(void)
 	ALOGDI("[%s] destroyed", __func__);
 }
 
+static alloc_device_t *mAllocator = NULL;
 int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 {
 	int fd;
@@ -694,8 +694,8 @@ int Camera3HWInterface::cameraDeviceClose()
 	}
 #endif
 	if (mAllocator) {
-		mAllocator->common.close((struct hw_device_t *)mAllocator);
-		mAllocator = NULL;
+		//mAllocator->common.close((struct hw_device_t *)mAllocator);
+		//mAllocator = NULL;
 	}
 
 	for (int i = 0; i < MAX_VIDEO_HANDLES; i++) {

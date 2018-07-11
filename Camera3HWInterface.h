@@ -48,7 +48,6 @@ private:
 	const camera3_callback_ops_t *mCallbacks;
 	int mHandles[MAX_VIDEO_HANDLES];
 	int mScaler;
-	alloc_device_t *mAllocator;
 	camera_metadata_t *mRequestMetadata[CAMERA3_TEMPLATE_MANUAL] =
 	{NULL, NULL, NULL, NULL, NULL};
 	sp<StreamManager> mStreamManager;
