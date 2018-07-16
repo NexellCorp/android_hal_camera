@@ -42,7 +42,7 @@ int Stream::allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_handle_t
 		return -ENODEV;
 	}
 	ret = mAllocator->alloc(mAllocator, w, h, format,
-			PROT_READ | PROT_WRITE, &ph, &stride);
+			GRALLOC_USAGE_HW_CAMERA_WRITE, &ph, &stride);
 	if (ret) {
 		ALOGE("Failed to alloc a new buffer:%d", ret);
 		return -ENOMEM;
@@ -618,7 +618,7 @@ int Stream::setBufferFormat(private_handle_t *buf)
 		f = V4L2_PIX_FMT_YUV420;
 	}
 	mSize = sizes[0] + sizes[1] + sizes[2];
-	if (buf->size != (int)mSize) {
+	if (buf->size < (int)mSize) {
 		ALOGE("[%s:%d] invalid size:%d", __func__, buf->size, mType);
 		return -EINVAL;
 	}
