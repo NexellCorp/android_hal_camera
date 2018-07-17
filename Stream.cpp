@@ -622,7 +622,7 @@ int Stream::setBufferFormat(private_handle_t *buf)
 		f = V4L2_PIX_FMT_YUV420;
 	}
 	mSize = sizes[0] + sizes[1] + sizes[2];
-	if (buf->size != (int)mSize) {
+	if (buf->size < (int)mSize) {
 		ALOGE("[%s:%d:%d] invalid size:%d", __func__, mCameraId, mType, buf->size);
 		return -EINVAL;
 	}
