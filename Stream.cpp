@@ -564,12 +564,17 @@ void Stream::stopStreaming()
 	ALOGDD("[%s:%d:%d] Enter, mQ:%d, mRQ:%d", __func__, mCameraId, mType,
 			mQ.size(), mRQ.size());
 
-	while(!mQ.isEmpty() || !mRQ.isEmpty()) {
-		ALOGDV("[%d] Wait Buffer drained", mType);
-		usleep(1000);
+	if (isRunning()) {
+		ALOGDV("[%s:%d:%d] requestExitAndWait Enter", __func__, mCameraId, mType);
+		requestExitAndWait();
+		ALOGDV("[%s:%d:%d] requestExitAndWait Exit", __func__, mCameraId, mType);
 	}
 
-	stopV4l2();
+	if (!mQ.isEmpty() || !mRQ.isEmpty()) {
+		ALOGDV("[%d] Wait Buffer drained", mType);
+		drainBuffer();
+		stopV4l2();
+	}
 
 	if ((mAllocator) && (mTmpBuf))
 		mAllocator->free(mAllocator, (buffer_handle_t)mTmpBuf);
@@ -583,12 +588,6 @@ void Stream::stopStreaming()
 	}
 #endif
 	ALOGDD("[%s:%d:%d] Exit", __func__, mCameraId, mType);
-
-	if (isRunning()) {
-		ALOGDV("[%s:%d:%d] requestExitAndWait Enter", __func__, mCameraId, mType);
-		requestExitAndWait();
-		ALOGDV("[%s:%d:%d] requestExitAndWait Exit", __func__, mCameraId, mType);
-	}
 }
 
 int Stream::setBufferFormat(private_handle_t *buf)
@@ -895,7 +894,8 @@ int Stream::dQBuf(int *dqIndex)
 	}
 	ret = v4l2_dqbuf(mFd, dqIndex, &fd, 1);
 	if (ret) {
-		ALOGE("[%s:%d:%d] Failed to dqbuf:%d", __func__, mCameraId, mType, ret);
+		ALOGE("[%s:%d:%d] Failed to dqbuf:%d", __func__, mCameraId,
+				mType, ret);
 	}
 	return ret;
 }
@@ -953,6 +953,9 @@ bool Stream::threadLoop()
 		}
 	}
 
+	if(exitPending())
+		goto stop;
+
 	qSize = mQ.size();
 	if (qSize > 0) {
 		for (i = 0; i < qSize; i++) {
@@ -976,6 +979,9 @@ bool Stream::threadLoop()
 			usleep(10000);
 		}
 	}
+
+	if(exitPending())
+		goto stop;
 
 	return true;
 
