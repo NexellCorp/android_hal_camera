@@ -1,14 +1,16 @@
 #define LOG_TAG "NXStream"
 #include <cutils/properties.h>
-#include <cutils/log.h>
 #include <cutils/str_parms.h>
 
 #include <sys/mman.h>
 #include <linux/videodev2.h>
 #include <linux/media-bus-format.h>
-#include <libnxjpeg.h>
-#include <camera/CameraMetadata.h>
 
+#include <fstream>
+#include <libnxjpeg.h>
+#include <CameraMetadata.h>
+
+#include <log/log.h>
 #include <gralloc_priv.h>
 
 #include <nx-scaler.h>
@@ -17,12 +19,11 @@
 #include "metadata.h"
 #include "Stream.h"
 
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
 namespace android {
 
 static gralloc_module_t const* getModule(void)
 {
-	hw_device_t *dev = NULL;
-	alloc_device_t *device = NULL;
 	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = NULL;
 	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
@@ -130,7 +131,6 @@ int Stream::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 	ALOGDD("[%s:%d:%d] scaling[%d:%d:%d:%d]", __func__, mCameraId, mType,
 			crop[0], crop[1], crop[2], crop[3]);
 
-	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = getModule();
 	android_ycbcr src, dst;
 	struct nx_scaler_context ctx;
@@ -530,8 +530,6 @@ int Stream::sendResult(void)
 
 void Stream::drainBuffer()
 {
-	int ret = NO_ERROR;
-
 	ALOGDV("[%d] start draining all RQ buffers", mType);
 
 	while (!mQ.isEmpty())
@@ -664,9 +662,6 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 		ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
 		return -ENOMEM;
 	}
-	private_handle_t *b = (private_handle_t*)*buf->buffer;
-	ALOGDV("[%s:%d:%d] Enter frame_number:%d, width:%d, height:%d",
-			__func__, mCameraId, mType, fNum, b->width, b->height);
 #if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 #ifdef CAMERA_SUPPORT_SCALING
 	if (!mScaling)
@@ -675,7 +670,11 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 #endif
 	{
 		if (mZmBuf[0] == NULL) {
+			private_handle_t *b = (private_handle_t*)*buf->buffer;
 			int width = b->width, height = b->height;
+
+			ALOGDV("[%s:%d:%d] Enter frame_number:%d, width:%d, height:%d",
+					__func__, mCameraId, mType, fNum, b->width, b->height);
 #ifndef CAMERA_USE_ZOOM
 			getAvaliableResolution(mCameraId, &width, &height);
 			if ((width == b->width) && (height == b->height)) {
@@ -694,6 +693,9 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 						__func__, mCameraId, mType);
 				return -ENOMEM;
 			}
+			ALOGDI("[%s:%d:%d] format:0x%x, width:%d, height:%d size:%d",
+					__func__, mCameraId, mType, b->format, b->width,
+					b->height, b->size);
 		}
 		uint32_t count = getQIndex();
 		if (!mZmBuf[count])
@@ -708,9 +710,6 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 #else
 	buffer->init(fNum, buf->stream, buf->buffer, meta);
 #endif
-	ALOGDI("[%s:%d:%d] format:0x%x, width:%d, height:%d size:%d",
-			__func__, mCameraId, mType, b->format, b->width,
-			b->height, b->size);
 	mQ.queue(buffer);
 	return ret;
 }
@@ -722,7 +721,7 @@ status_t Stream::prepareForRun()
 	int ret = -EINVAL, dma_fd = 0;
 	private_handle_t *ph = NULL;
 	buffer_handle_t buffer;
-	int width, height, format, buf_count = 0;
+	int width, height, format = 0;
 	
 	ALOGDV("[%s:%d:%d]", __func__, mCameraId, mType);
 

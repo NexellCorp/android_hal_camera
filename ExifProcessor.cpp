@@ -6,8 +6,9 @@
 #include <linux/videodev2.h>
 #include <linux/media-bus-format.h>
 
-#include <utils/Log.h>
+#include <log/log.h>
 
+#include <fstream>
 #include <libnxjpeg.h>
 #include <gralloc_priv.h>
 #include <nx-scaler.h>
@@ -490,7 +491,6 @@ bool ExifProcessor::processExif()
 	}
 
 	// 1th IFD TIFF
-	int iThumbFd = 0;
 	if (Exif->enableThumb && ThumbnailBuffer && ThumbnailJpegSize) {
 		exifSizeExceptThumb = tmp = LongerTagOffset;
 		memcpy(pNextIfdOffset, &tmp, OFFSET_SIZE);

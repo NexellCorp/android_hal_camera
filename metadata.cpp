@@ -1,14 +1,15 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cutils/log.h>
+#include <log/log.h>
 
-#include <camera/CameraMetadata.h>
+#include <CameraMetadata.h>
 
 #include "GlobalDef.h"
 #include "v4l2.h"
 #include "metadata.h"
 
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
 namespace android {
 
 #define MAX_SYNC_LATENCY 4
@@ -151,6 +152,7 @@ static uint32_t getFrameInfo(uint32_t id, int fd, struct nx_sensor_info *s)
 {
 	int r = 0, ret = 0;
 
+	(void)(id);
 	ALOGDI("[%s] Camera:%d Information", __func__, id);
 
 	ret = v4l2_get_crop(fd, &s->crop);
@@ -916,7 +918,6 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 	if (meta.exists(ANDROID_CONTROL_AF_TRIGGER) &&
 	meta.exists(ANDROID_CONTROL_AF_TRIGGER_ID)) {
 		uint8_t trigger = meta.find(ANDROID_CONTROL_AF_TRIGGER).data.u8[0];
-		int32_t trigger_id = meta.find(ANDROID_CONTROL_AF_TRIGGER_ID).data.i32[0];
 		uint8_t afState;
 
 		metaData.update(ANDROID_CONTROL_AF_TRIGGER, &trigger, 1);
@@ -988,13 +989,12 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 		metaData.update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &trigger, 1);
 		if (trigger == ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_START) {
 			aeState = ANDROID_CONTROL_AE_STATE_LOCKED;
-			//uint8_t aeState = ANDROID_CONTROL_AE_STATE_CONVERGED;
-			//metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
 		} else {
 			aeState = ANDROID_CONTROL_AE_STATE_INACTIVE;
 			metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
 		}
 		ALOGDV("ANDROID_CONTROL_AE_STATE:%d", aeState);
+		(void)(trigger_id);
 	}
 	if (meta.exists(ANDROID_CONTROL_AWB_LOCK)) {
 		uint8_t awbLock =

@@ -1,9 +1,13 @@
 LOCAL_PATH := $(call my-dir)
 
+# HAL module implemenation, not prelinked and stored in
+# hw/<OVERLAY_HARDWARE_MODULE_ID>.<ro.product.board>.so
 include $(CLEAR_VARS)
+LOCAL_PRELINK_MODULE := false
 
 LOCAL_MODULE_RELATIVE_PATH := hw
-LOCAL_MODULE := camera.$(TARGET_BOOTLOADER_BOARD_NAME)
+LOCAL_MODULE := camera.$(TARGET_BOARD_PLATFORM)
+LOCAL_VENDOR_MODULE := true
 LOCAL_CFLAGS :=
 
 ifneq ($(BOARD_CAMERA_NUM),)
@@ -60,10 +64,12 @@ LOCAL_SHARED_LIBRARIES := \
 	libutils \
 	libhardware \
 	libcamera_metadata \
-	libcamera_client \
 	libsync \
 	libnxjpeg \
 	libnx_scaler
+
+LOCAL_STATIC_LIBRARIES := android.hardware.camera.common@1.0-helper
+
 LOCAL_C_INCLUDES += \
 	system/media/camera/include \
 	system/media/core/include \

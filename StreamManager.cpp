@@ -1,12 +1,12 @@
 #define LOG_TAG "NXStreamManager"
 #include <cutils/properties.h>
-#include <cutils/log.h>
+#include <log/log.h>
 #include <cutils/str_parms.h>
 
 #include <sys/mman.h>
 
 #include <hardware/camera.h>
-#include <camera/CameraMetadata.h>
+#include <CameraMetadata.h>
 
 #include <linux/videodev2.h>
 #include <linux/media-bus-format.h>
@@ -22,12 +22,11 @@
 buffer_handle_t firstFrame = NULL;
 #endif
 
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
 namespace android {
 
 static gralloc_module_t const* getModule(void)
 {
-	hw_device_t *dev = NULL;
-	alloc_device_t *device = NULL;
 	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = NULL;
 	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
@@ -39,7 +38,6 @@ static gralloc_module_t const* getModule(void)
 int StreamManager::allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_handle_t *p)
 {
 	int ret = NO_ERROR, stride = 0;
-	gralloc_module_t const *module = getModule();
 	buffer_handle_t ph;
 
 	if (!mAllocator) {
@@ -192,7 +190,6 @@ int StreamManager::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 			__func__, mCameraId, srcBuf->width, srcBuf->height,
 		dstBuf->width, dstBuf->height);
 
-	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = getModule();
 	android_ycbcr src, dst;
 	struct nx_scaler_context ctx;
@@ -531,10 +528,12 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 			return -EINVAL;
 		}
 		private_handle_t *ph = (private_handle_t *)*b->buffer;
-		camera3_stream_t *s =b->stream;
+		camera3_stream_t *s = b->stream;
 		ALOGDD("[%s:%d] [Input] frmaeNumber:%d, format:0x%x, width:%d, height:%d, size:%d",
 				__func__, mCameraId, r->frame_number, s->format, s->width,
 				s->height, ph->size);
+		(void)(s);
+		(void)(ph);
 	}
 	for (uint32_t i = 0; i < r->num_output_buffers; i++) {
 		const camera3_stream_buffer_t *b = &r->output_buffers[i];
@@ -584,8 +583,6 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 	mRequestQ.queue(request);
 	mMeta = meta;
 	return ret;
-out:
-	return -EINVAL;
 }
 
 int StreamManager::stopStream()
@@ -648,8 +645,6 @@ private_handle_t* StreamManager::getSimilarActiveStream(camera3_stream_buffer_t 
 
 int StreamManager::sendResult(void)
 {
-	int ret = NO_ERROR;
-
 	nx_camera_request_t *request = mRequestQ.getHead();
 	if (!request) {
 		ALOGE("[%s:%d] Failed to get request from Queue",
@@ -751,7 +746,6 @@ int StreamManager::sendResult(void)
 						result.num_output_buffers, s);
 				if (copy == NULL)
 					copy = preview;
-				uint32_t size[2] = {0, 0};
 				if (stream->getFormat() == HAL_PIXEL_FORMAT_BLOB) {
 					if ((stream->getWidth() != (uint32_t)copy->width) ||
 						(stream->getHeight() != (uint32_t)copy->height)) {
@@ -791,8 +785,6 @@ int StreamManager::sendResult(void)
 
 void StreamManager::drainBuffer()
 {
-	int ret = NO_ERROR;
-
 	ALOGDV("[%s:%d] Enter", __func__, mCameraId);
 
 	while (!mRequestQ.isEmpty())
@@ -803,10 +795,8 @@ void StreamManager::drainBuffer()
 
 status_t StreamManager::readyToRun()
 {
-	int ret = NO_ERROR;
-
 	ALOGDV("[%s:%d]", __func__, mCameraId);
-	return ret;
+	return NO_ERROR;
 }
 
 bool StreamManager::threadLoop()
