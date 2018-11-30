@@ -701,10 +701,12 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 		if (!mZmBuf[count])
 			ALOGE("[%s:%d:%d] mZmBuf[%d]:%p is invalid\n", __func__,
 					mCameraId, mType, count, mZmBuf[count]);
+#ifdef TRACE_STREAM
 		private_handle_t *z = (private_handle_t*)mZmBuf[count];
 		ALOGDD("[%s:%d:%d] format:0x%x, width:%d, height:%d size:%d",
 				__func__, mCameraId, mType, z->format, z->width,
 				z->height, z->size);
+#endif
 		buffer->init(fNum, buf->stream, buf->buffer, mZmBuf[count], meta);
 	}
 #else
