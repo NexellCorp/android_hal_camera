@@ -17,11 +17,12 @@ namespace android {
 int32_t pixel_array_size[NUM_OF_CAMERAS][2] = {{0, 0}, };
 
 #ifdef CAMERA_SUPPORT_SCALING
-struct v4l2_frame_info supported_lists[6] = {
+struct v4l2_frame_info supported_lists[] = {
 	{0, 176, 144, {15, 30}},/*QCIF*/
 	{1, 320, 240, {15, 30}},/*QVGA*/
 	{2, 352, 288, {15, 30}},/*CIF*/
 	{3, 640, 480, {15, 30}},/*VGA*/
+	{4, 704, 480, {15, 30}},/*VGA*/
 	{4, 1280, 720, {15, 30}},/*HD*/
 	{5, 1920, 1080, {15, 30}},/*FHD*/
 };
@@ -152,6 +153,7 @@ static uint32_t getFrameInfo(uint32_t id, int fd, struct nx_sensor_info *s)
 	int r = 0, ret = 0;
 
 	ALOGDI("[%s] Camera:%d Information", __func__, id);
+	(void)(id);
 
 	ret = v4l2_get_crop(fd, &s->crop);
 	if (ret)
@@ -169,22 +171,20 @@ static uint32_t getFrameInfo(uint32_t id, int fd, struct nx_sensor_info *s)
 		if (!ret) {
 			ALOGDI("[%d] width:%d, height:%d",
 			      r, s->frames[r].width, s->frames[r].height);
-			if ((s->frames[r].width % 32) == 0) {
-				for (int i = 0; i <= V4L2_INTERVAL_MAX; i++) {
-					ret = v4l2_get_frameinterval(fd,
-								     &s->frames[r],
-								     i);
-					if (ret) {
-						ALOGE("Failed to get interval for width:%d, height:%d",
-						      s->frames[r].width, s->frames[r].height);
-						return r;
-					}
-					ALOGDI("width:%d, height:%d, %s interval:%d",
-					      s->frames[r].width, s->frames[r].height,
-					      (i) ? "max":"min", s->frames[r].interval[i]);
+			for (int i = 0; i <= V4L2_INTERVAL_MAX; i++) {
+				ret = v4l2_get_frameinterval(fd,
+								&s->frames[r],
+								i);
+				if (ret) {
+					ALOGE("Failed to get interval for width:%d, height:%d",
+						s->frames[r].width, s->frames[r].height);
+					return r;
 				}
-				r++;
+				ALOGDI("width:%d, height:%d, %s interval:%d",
+					s->frames[r].width, s->frames[r].height,
+					(i) ? "max":"min", s->frames[r].interval[i]);
 			}
+			r++;
 		} else
 			break;
 	}
@@ -423,16 +423,18 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 				j++;
 				count++;
 				break;
-			} else if ((supported_lists[j].width * supported_lists[j].height) > 
+			} else if ((supported_lists[j].width * supported_lists[j].height) >
 					(sensor_lists[i].width * sensor_lists[i].height)) {
-				lists[count].index = count;
-				lists[count].width = sensor_lists[i].width;
-				lists[count].height = sensor_lists[i].height;
-				lists[count].interval[0] = sensor_lists[i].interval[0];
-				lists[count].interval[1] = sensor_lists[i].interval[1];
-				count++;
+				if ((sensor_lists[i].width / 32) == 0) {
+					lists[count].index = count;
+					lists[count].width = sensor_lists[i].width;
+					lists[count].height = sensor_lists[i].height;
+					lists[count].interval[0] = sensor_lists[i].interval[0];
+					lists[count].interval[1] = sensor_lists[i].interval[1];
+					count++;
+				}
 				break;
-			} else if ((supported_lists[j].width * supported_lists[j].height) < 
+			} else if ((supported_lists[j].width * supported_lists[j].height) <
 					(sensor_lists[i].width * sensor_lists[i].height)) {
 				lists[count].index = count;
 				lists[count].width = supported_lists[j].width;
@@ -444,12 +446,17 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 		}
 #endif
 		if (j == list_size) {
-			lists[count].index = count;
-			lists[count].width = sensor_lists[i].width;
-			lists[count].height = sensor_lists[i].height;
-			lists[count].interval[0] = sensor_lists[i].interval[0];
-			lists[count].interval[1] = sensor_lists[i].interval[1];
-			count++;
+#ifdef CAMERA_SUPPORT_SCALING
+			if ((sensor_lists[i].width / 32) == 0)
+#endif
+			{
+				lists[count].index = count;
+				lists[count].width = sensor_lists[i].width;
+				lists[count].height = sensor_lists[i].height;
+				lists[count].interval[0] = sensor_lists[i].interval[0];
+				lists[count].interval[1] = sensor_lists[i].interval[1];
+				count++;
+			}
 		}
 	}
 
@@ -465,8 +472,9 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 	}
 #endif
 	for (i = 0; i < count; i++)
-		ALOGDI("[%d] width:%d, height:%d, min:%d, max:%d", i, lists[i].width,
-				lists[i].height, lists[i].interval[0], lists[i].interval[1]);
+		ALOGDI("[DEBUG:%d] width:%d, height:%d, min:%d, max:%d", i,
+				lists[i].width, lists[i].height,
+				lists[i].interval[0], lists[i].interval[1]);
 
 	/* TODO: handle variation of sensor */
 	/* check whether same format has serveral resolutions */
@@ -1125,7 +1133,7 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 			ALOGDI("minFrame:%lld", minFrameDuration);
 			minFrameDuration = (long) 1e9/ minFrameDuration;
 		}
-		ALOGDV("ANDROID_SENSOR_FRAME_DURATION:%ld, Min:%ld",
+		ALOGDV("ANDROID_SENSOR_FRAME_DURATION:%ld, Min:%lld",
 				sensorFrameDuration, minFrameDuration);
 		if (sensorFrameDuration < minFrameDuration)
 			sensorFrameDuration = minFrameDuration;
