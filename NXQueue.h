@@ -1,7 +1,7 @@
 #ifndef _NX_QUEUE_H
 #define _NX_QUEUE_H
 
-#include <queue>
+#include <deque>
 #include <utils/Mutex.h>
 
 namespace android {
@@ -18,13 +18,13 @@ public:
 
     void queue(const T& item) {
 		Mutex::Autolock l(mLock);
-		q.push(item);
+		q.push_back(item);
     }
 
     const T& dequeue() {
 		Mutex::Autolock l(mLock);
         const T& item = q.front();
-        q.pop();
+        q.pop_front();
         return item;
     }
 
@@ -43,8 +43,14 @@ public:
         return q.front();
     }
 
+    const T& getSecond() {
+		Mutex::Autolock l(mLock);
+		const T& second = q.at(1);
+        return second;
+    }
+
 private:
-	std::queue<T> q;
+	std::deque<T> q;
 	Mutex mLock;
 };
 
