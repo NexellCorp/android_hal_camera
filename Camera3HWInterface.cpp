@@ -14,6 +14,7 @@
 #include <camera/CameraMetadata.h>
 
 #include <nx-scaler.h>
+#include <nx-deinterlacer.h>
 #include "GlobalDef.h"
 #include "v4l2.h"
 #include "metadata.h"
@@ -25,17 +26,22 @@
 
 namespace android {
 
+#define DEFAULT_MAX_HANDLES	2
+#define COPY_MAX_HANDLES	1
+
 struct CameraInfo {
 	/* type - 0:back, 1:front */
-	bool	type;
-	char	dev_path[20];
-	char	subdev_path[20];
-	int	orientation;
-	int	max_handles;
-	const	camera_metadata_t *metadata;
+	bool			type;
+	char			dev_path[20];
+	char			subdev_path[20];
+	int			orientation;
+	int			interlaced;
+	int			max_handles;
+	const camera_metadata_t	*metadata;
 };
 
-static struct CameraInfo gCameraInfo[NUM_OF_CAMERAS] = {{0, {0, }, {0, }, 0, 2, 0}, };
+static struct CameraInfo gCameraInfo[NUM_OF_CAMERAS] =
+	{{0, {0, }, {0, }, 0, 0, DEFAULT_MAX_HANDLES, 0}, };
 /**
  * Static Function
  */
@@ -44,11 +50,12 @@ static void makeCameraInfo(void)
 	int video_num = 0, i = 0, j = 0;
 	char string[20] = {0, };
 	char *ptr = NULL;
-	int interlaced = 0;
+	int copy = 0;
 
-	ALOGDI("[%s] num of cameras:%d, back:%s-%s, front:%s-%s", __func__,
-			NUM_OF_CAMERAS, BACK_CAMERA_DEVICE, BACK_CAMERA_INTERLACED,
-			FRONT_CAMERA_DEVICE, FRONT_CAMERA_INTERLACED);
+	ALOGDI("[%s] num of cameras:%d, back:%s-%s-%s, front:%s-%s-%s", __func__,
+			NUM_OF_CAMERAS,
+			BACK_CAMERA_DEVICE, BACK_CAMERA_INTERLACED, BACK_CAMERA_COPY_MODE,
+			FRONT_CAMERA_DEVICE, FRONT_CAMERA_INTERLACED, FRONT_CAMERA_COPY_MODE);
 
 	if (BACK_CAMERA_DEVICE)
 		strcpy(string, BACK_CAMERA_DEVICE);
@@ -82,14 +89,27 @@ static void makeCameraInfo(void)
 	ptr = strtok(string, ",");
 	for (j = 0; j < i; j++) {
 		if (ptr != NULL) {
-			interlaced = atoi(ptr);
-			if (interlaced)
-				gCameraInfo[j].max_handles = 1;
-			else
-				gCameraInfo[j].max_handles = 2;
+			gCameraInfo[j].interlaced = atoi(ptr);
 			ptr = strtok(NULL, ",");
 		} else {
-			gCameraInfo[j].max_handles = 2;
+			gCameraInfo[j].interlaced = 0;
+			break;
+		}
+	}
+
+	if (BACK_CAMERA_COPY_MODE)
+		strcpy(string, BACK_CAMERA_COPY_MODE);
+	ptr = strtok(string, ",");
+	for (j = 0; j < i; j++) {
+		if (ptr != NULL) {
+			copy = atoi(ptr);
+			if (copy)
+				gCameraInfo[j].max_handles = COPY_MAX_HANDLES;
+			else
+				gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
+			ptr = strtok(NULL, ",");
+		} else {
+			gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
 			break;
 		}
 	}
@@ -123,29 +143,45 @@ static void makeCameraInfo(void)
 			break;
 		}
 	}
+
 	if (FRONT_CAMERA_INTERLACED)
 		strcpy(string, FRONT_CAMERA_INTERLACED);
 	ptr = strtok(string, ",");
 	for (j = p; j < i; j++) {
 		if (ptr != NULL) {
-			interlaced = atoi(ptr);
-			if (interlaced)
-				gCameraInfo[j].max_handles = 1;
-			else
-				gCameraInfo[j].max_handles = 2;
+			gCameraInfo[j].interlaced = atoi(ptr);
 			ptr = strtok(NULL, ",");
 		} else {
-			gCameraInfo[j].max_handles = 2;
+			gCameraInfo[j].interlaced = 0;
 			break;
 		}
 	}
+
+	if (FRONT_CAMERA_COPY_MODE)
+		strcpy(string, FRONT_CAMERA_COPY_MODE);
+	ptr = strtok(string, ",");
+	for (j = p; j < i; j++) {
+		if (ptr != NULL) {
+			copy = atoi(ptr);
+			if (copy)
+				gCameraInfo[j].max_handles = COPY_MAX_HANDLES;
+			else
+				gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
+			ptr = strtok(NULL, ",");
+		} else {
+			gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
+			break;
+		}
+	}
+
 	for (i = 0; i < NUM_OF_CAMERAS; i++) {
-		ALOGDI("[%s] %s device:%s, sub device:%s, orientation:%d, %d, %s",
+		ALOGDI("[%s] %s device:%s, sub device:%s, orientation:%d, %d, %s-%d",
 				__func__,
 				(gCameraInfo[i].type) ? "front" : "back",
 				gCameraInfo[i].dev_path, gCameraInfo[i].subdev_path,
 				gCameraInfo[i].orientation, gCameraInfo[i].max_handles,
-				(gCameraInfo[i].max_handles == 1) ? "interlaced" : "progressive");
+				(gCameraInfo[i].interlaced) ? "interlaced" : "progressive",
+				gCameraInfo[i].interlaced);
 	}
 }
 
@@ -237,6 +273,7 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 	: mCameraId(cameraId),
 	mCallbacks(NULL),
 	mScaler(-1),
+	mDeinterlacer(-1),
 	mStreamManager(NULL)
 {
 	memset(&mCameraDevice, 0x0, sizeof(camera3_device_t));
@@ -247,7 +284,7 @@ Camera3HWInterface::Camera3HWInterface(int cameraId)
 	mCameraDevice.ops = &camera3Ops;
 	mCameraDevice.priv = this;
 
-	for (int i = 0; i < MAX_VIDEO_HANDLES; i++)
+	for (int i = 0; i < NX_MAX_STREAM; i++)
 		mHandles[i] = -1;
 
 	ALOGDI("cameraId = %d", cameraId);
@@ -273,7 +310,7 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		return -ENODEV;
 	}
 	mHandles[0] = fd;
-	if (gCameraInfo[mCameraId].max_handles > 1) {
+	if (gCameraInfo[mCameraId].max_handles > COPY_MAX_HANDLES) {
 		fd = open(gCameraInfo[mCameraId].subdev_path, O_RDWR);
 		if (fd < 0) {
 			ALOGE("[%s:%d] Failed to open %s camera :%d", __func__, mCameraId,
@@ -285,14 +322,22 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 
 	mCallbacks = callback;
 
-#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 	fd = scaler_open();
 	if (fd < 0) {
 		ALOGE("[%s:%d] Failed to open scaler", __func__, mCameraId);
 		return -ENODEV;
 	}
 	mScaler = fd;
-#endif
+
+	if (gCameraInfo[mCameraId].interlaced) {
+		fd = nx_deinter_open();
+		if (fd < 0) {
+			ALOGE("[%s:%d] Failed to open deinterlacer", __func__,
+					mCameraId);
+			return -ENODEV;
+		}
+		mDeinterlacer = fd;
+	}
 
 	if (mAllocator == NULL) {
 		hw_device_t *dev = NULL;
@@ -356,7 +401,9 @@ int Camera3HWInterface::configureStreams(camera3_stream_configuration_t *stream_
 
 	if (mStreamManager == NULL) {
 		ALOGDD("[%s:%d] new Stream", __func__, mCameraId);
-		mStreamManager = new StreamManager(mCameraId, mHandles, mScaler, mAllocator, mCallbacks);
+		mStreamManager = new StreamManager(mCameraId, mHandles, mScaler,
+				mDeinterlacer, gCameraInfo[mCameraId].interlaced,
+				mAllocator, mCallbacks);
 		if (mStreamManager == NULL) {
 			ALOGE("[%s:%d] Failed to construct StreamManager for preview",
 					__func__, mCameraId);
@@ -703,18 +750,18 @@ int Camera3HWInterface::cameraDeviceClose()
 		mStreamManager.clear();
 		mStreamManager = NULL;
 	}
-#if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
+
 	if (mScaler >= 0) {
 		nx_scaler_close(mScaler);
 		mScaler = -1;
 	}
-#endif
-	if (mAllocator) {
-		//mAllocator->common.close((struct hw_device_t *)mAllocator);
-		//mAllocator = NULL;
+
+	if (mDeinterlacer >= 0) {
+		nx_scaler_close(mDeinterlacer);
+		mDeinterlacer = -1;
 	}
 
-	for (int i = 0; i < MAX_VIDEO_HANDLES; i++) {
+	for (int i = 0; i < NX_MAX_STREAM; i++) {
 		if (mHandles[i] >= 0)
 			close(mHandles[i]);
 		mHandles[i] = -1;
