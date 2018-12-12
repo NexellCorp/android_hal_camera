@@ -22,6 +22,10 @@ ifneq ($(BOARD_CAMERA_BACK_INTERLACED),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_BACK_INTERLACED='$(BOARD_CAMERA_BACK_INTERLACED)'
 endif
 
+ifneq ($(BOARD_CAMERA_BACK_COPY_MODE),)
+	LOCAL_CFLAGS += -DBOARD_CAMERA_BACK_COPY_MODE='$(BOARD_CAMERA_BACK_COPY_MODE)'
+endif
+
 ifneq ($(BOARD_CAMERA_FRONT_DEVICE),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_FRONT_DEVICE='$(BOARD_CAMERA_FRONT_DEVICE)'
 endif
@@ -32,6 +36,10 @@ endif
 
 ifneq ($(BOARD_CAMERA_FRONT_INTERLACED),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_FRONT_INTERLACED='$(BOARD_CAMERA_FRONT_INTERLACED)'
+endif
+
+ifneq ($(BOARD_CAMERA_FRONT_COPY_MODE),)
+	LOCAL_CFLAGS += -DBOARD_CAMERA_FRONT_COPY_MODE='$(BOARD_CAMERA_FRONT_COPY_MODE)'
 endif
 
 ifeq ($(BOARD_CAMERA_USE_ZOOM), true)
@@ -63,7 +71,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libcamera_client \
 	libsync \
 	libnxjpeg \
-	libnx_scaler
+	libnx_scaler \
+	libnx_deinterlacer
 LOCAL_C_INCLUDES += \
 	system/media/camera/include \
 	system/media/core/include \
@@ -72,6 +81,7 @@ LOCAL_C_INCLUDES += \
 	frameworks/native/include \
 	frameworks/av/include \
 	device/nexell/library/nx-scaler \
+	device/nexell/library/nx-deinterlacer \
 	$(LOCAL_PATH)/../gralloc \
 	$(LOCAL_PATH)/../libnxjpeg \
 	external/libjpeg-turbo \
