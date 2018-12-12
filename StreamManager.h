@@ -31,17 +31,21 @@ typedef struct nx_camera_request {
 
 class StreamManager : public Thread {
 public:
-	StreamManager(uint32_t id, int fd[], int scaler, alloc_device_t *allocator,
+	StreamManager(uint32_t id, int fd[], int scaler,
+			int deinterlacer, uint32_t interlaced,
+			alloc_device_t *allocator,
 			const camera3_callback_ops_t *callback)
 		: mCameraId(id),
 		mScaler(scaler),
+		mDeinterlacer(deinterlacer),
+		mInterlaced(interlaced),
 		mAllocator(allocator),
 		mCb(callback),
 		mNumBuffers(0),
 		mPipeLineDepth(0),
 		mMeta(NULL) {
 			ALOGDD("[%s] Create", __func__);
-			for (int i = 0; i < MAX_VIDEO_HANDLES; i++) {
+			for (int i = 0; i < NX_MAX_STREAM; i++) {
 				mFd[i] = fd[i];
 				ALOGDD("[%s] fd[%d]=%d", __func__, i, mFd[i]);
 			}
@@ -73,20 +77,16 @@ private:
 	int getRunningStreamsCount(void);
 	void drainBuffer(void);
 	int sendResult(void);
-	int allocBuffer(uint32_t w, uint32_t h, uint32_t format, buffer_handle_t *p);
-	int jpegEncoding(private_handle_t *dst, private_handle_t *src,
-			exif_attribute_t *exif);
-	int scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
-			const camera_metadata_t *request);
-	int copyBuffer(private_handle_t *dst, private_handle_t *src);
 	int runStreamThread(camera3_stream_t *s);
 	private_handle_t* getSimilarActiveStream(camera3_stream_buffer_t *out,
 			int num_buffers, camera3_stream_t *s);
 
 private:
 	uint32_t mCameraId;
-	int mFd[MAX_VIDEO_HANDLES];
+	int mFd[NX_MAX_STREAM];
 	int mScaler;
+	int mDeinterlacer;
+	uint32_t mInterlaced;
 	alloc_device_t *mAllocator;
 	ExifProcessor mExifProcessor;
 	const camera3_callback_ops_t * mCb;

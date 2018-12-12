@@ -46,8 +46,9 @@ public:
 private:
 	int mCameraId;
 	const camera3_callback_ops_t *mCallbacks;
-	int mHandles[MAX_VIDEO_HANDLES];
+	int mHandles[NX_MAX_STREAM];
 	int mScaler;
+	int mDeinterlacer;
 	camera_metadata_t *mRequestMetadata[CAMERA3_TEMPLATE_MANUAL] =
 	{NULL, NULL, NULL, NULL, NULL};
 	sp<StreamManager> mStreamManager;
