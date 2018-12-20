@@ -59,26 +59,40 @@ bool isSupportedResolution(uint32_t id, uint32_t width, uint32_t height)
 void getAvaliableResolution(uint32_t id, int *width, int *height)
 {
 	struct nx_sensor_info *s = &sensor_supported_lists[id];
-	uint32_t left = 0, top = 0;
-	uint32_t w = (uint32_t)*width;
-	uint32_t h = (uint32_t)*height;
+	uint32_t left = 0, top = 0, i;
+	uint32_t w = (uint32_t)*width, dst_w = 0;
+	uint32_t h = (uint32_t)*height, dst_h = 0;
 
 	if (s->crop.width && s->crop.height) {
 		left = s->crop.left;
 		top = s->crop.top;
 	}
-	for (int i = 0; i < MAX_SUPPORTED_RESOLUTION; i ++) {
+	for (i = 0; i < MAX_SUPPORTED_RESOLUTION; i ++) {
+		ALOGDI("[%s] w:%d, h:%d, frame[%d].width:%d, frame[%d].height:%d",
+				__func__, w, h, i, s->frames[i].width,
+				i, s->frames[i].height);
 		if ((w * h) < (s->frames[i].width *
 				s->frames[i].height)) {
 			if ((w + left <= s->frames[i].width) &&
 					(h + top <= s->frames[i].height)) {
-				*width = s->frames[i].width;
-				*height = s->frames[i].height;
+				dst_w = s->frames[i].width;
+				dst_h = s->frames[i].height;
 				break;
 			}
 		} else if (s->frames[i].width == 0)
 			break;
+		else {
+		}
 	}
+
+	if (!dst_w || !dst_h) {
+		dst_w = s->frames[i-1].width;
+		dst_h = s->frames[i-1].height;
+	}
+	*width = dst_w;
+	*height = dst_h;
+	ALOGDI("[%s] src w:%d, h:%d - dst w:%d, h:%d",
+			__func__, w, h, dst_w, dst_h);
 }
 
 bool getCropInfo(uint32_t id, struct v4l2_crop_info *crop)
