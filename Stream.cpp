@@ -1,4 +1,6 @@
 #define LOG_TAG "NXStream"
+#include <stdio.h>
+
 #include <cutils/properties.h>
 #include <cutils/str_parms.h>
 
@@ -511,7 +513,7 @@ int Stream::sendResult(void)
 			scaling(ph, buf->getZoomPrivateHandle(), buf->getMetadata());
 	}
 #endif
-	if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf)) {
+	if (!mSkip && (mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf)) {
 		exif_attribute_t *exif = new exif_attribute_t();
 		uint32_t crop[4] = {0, };
 		translateMetadata(mCameraId, buf->getMetadata(), exif, 0, 0);
@@ -662,6 +664,7 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 		ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
 		return -ENOMEM;
 	}
+	private_handle_t *b = (private_handle_t*)*buf->buffer;
 #if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
 #ifdef CAMERA_SUPPORT_SCALING
 	if (!mScaling)
@@ -669,25 +672,30 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 	else
 #endif
 	{
+		int width = b->width, height = b->height;
+		int format = b->format;
+
+		ALOGDD("[%s:%d:%d] format:%x width:%d height:%d", __func__,
+				mCameraId, mType, format, width, height);
+		if (b->format == HAL_PIXEL_FORMAT_BLOB) {
+			format = HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED;
+			ALOGDD("[%s:%d:%d] BLOB format:%x width:%d height:%d", __func__,
+					mCameraId, mType, format, b->width, b->height);
+			width = mStream->width;
+			height = mStream->height;
+		}
 		if (mZmBuf[0] == NULL) {
-			private_handle_t *b = (private_handle_t*)*buf->buffer;
-			int width = b->width, height = b->height;
 
 			ALOGDV("[%s:%d:%d] Enter frame_number:%d, width:%d, height:%d",
 					__func__, mCameraId, mType, fNum, b->width, b->height);
 #ifndef CAMERA_USE_ZOOM
 			getAvaliableResolution(mCameraId, &width, &height);
-			if ((width == b->width) && (height == b->height)) {
-				ALOGE("[%s:%d:%d] Failed to get avaliable stream size",
-						__func__, mCameraId, mType);
-				return -EINVAL;
-			}
 #endif
 			if (mCrop) {
 				width = mCropInfo.width;
 				height = mCropInfo.height;
 			}
-			allocBuffer(width, height, b->format, &mZmBuf[0]);
+			allocBuffer(width, height, format, &mZmBuf[0]);
 			if (mZmBuf[0] == NULL) {
 				ALOGE("[%s:%d:%d] Failed to alloc new buffer for scaling",
 						__func__, mCameraId, mType);
@@ -757,6 +765,7 @@ status_t Stream::prepareForRun()
 	}
 
 	ph = buf->getPrivateHandle();
+	format = ph->format;
 	if (ph->format == HAL_PIXEL_FORMAT_BLOB) {
 		format = HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED;
 		width = mStream->width;
@@ -780,12 +789,6 @@ status_t Stream::prepareForRun()
 
 #ifndef CAMERA_USE_ZOOM
 		getAvaliableResolution(mCameraId, &width, &height);
-		if ((width == ph->width) && (height == ph->height)) {
-			ALOGE("[%s:%d:%d] Failed to get avaliable stream size",
-					__func__, mCameraId, mType);
-			ret = -EINVAL;
-			goto fail;
-		}
 #endif
 		if (mCrop) {
 			width = mCropInfo.width;
