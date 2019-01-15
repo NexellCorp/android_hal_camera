@@ -2,9 +2,27 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
+$(info  $(PLATFORM_VERSION))
+$(info  $(BUILD_ID))
+#ANDROID_VERSION_STR := $(PLATFORM_VERSION)
+#ANDROID_VERSION := $(firstword $(ANDROID_VERSION_STR))
+#$(info  $(ANDROID_VERSION))
+LOCAL_PRELINK_MODULE := false
+
 LOCAL_MODULE_RELATIVE_PATH := hw
+ifeq ($(BUILD_ID), PI)
+LOCAL_MODULE := camera.$(TARGET_BOARD_PLATFORM)
+LOCAL_VENDOR_MODULE := true
+else
 LOCAL_MODULE := camera.$(TARGET_BOOTLOADER_BOARD_NAME)
+endif
 LOCAL_CFLAGS :=
+
+#ifeq ($(ANDROID_VERSION), 9)
+ifeq ($(BUILD_ID), PI)
+LOCAL_VENDOR_MODULE := true
+LOCAL_CFLAGS += -DANDROID_PIE
+endif
 
 ifneq ($(BOARD_CAMERA_NUM),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_NUM=$(BOARD_CAMERA_NUM)
@@ -72,7 +90,15 @@ LOCAL_SHARED_LIBRARIES := \
 	libsync \
 	libnxjpeg \
 	libnx_scaler \
-	libnx_deinterlacer
+	libnx_deinterlacer \
+
+ifeq ($(BUILD_ID), PI)
+LOCAL_STATIC_LIBRARIES := android.hardware.camera.common@1.0-helper
+else
+LOCAL_SHARED_LIBRARIES += \
+	libcamera_client
+endif
+
 LOCAL_C_INCLUDES += \
 	system/media/camera/include \
 	system/media/core/include \
