@@ -1,14 +1,21 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cutils/log.h>
+#include <log/log.h>
 
+#ifdef ANDROID_PIE
+#include <CameraMetadata.h>
+#else
 #include <camera/CameraMetadata.h>
+#endif
 
 #include "GlobalDef.h"
 #include "v4l2.h"
 #include "metadata.h"
 
+#ifdef ANDROID_PIE
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
+#endif
 namespace android {
 
 #define MAX_SYNC_LATENCY 4
@@ -954,6 +961,7 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 			afState = ANDROID_CONTROL_AF_STATE_INACTIVE;
 		}
 		ALOGDV("ANDROID_CONTROL_AF_STATE:%d", afState);
+		(void)(trigger_id);
 		metaData.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
 	}
 	if (meta.exists(ANDROID_CONTROL_AF_MODE)) {
@@ -1017,6 +1025,7 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 			aeState = ANDROID_CONTROL_AE_STATE_INACTIVE;
 			metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
 		}
+		(void)(trigger_id);
 		ALOGDV("ANDROID_CONTROL_AE_STATE:%d", aeState);
 	}
 	if (meta.exists(ANDROID_CONTROL_AWB_LOCK)) {
