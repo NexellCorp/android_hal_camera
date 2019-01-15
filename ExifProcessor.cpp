@@ -1,5 +1,5 @@
 #define LOG_TAG "ExifProcessor"
-
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 
@@ -490,7 +490,6 @@ bool ExifProcessor::processExif()
 	}
 
 	// 1th IFD TIFF
-	int iThumbFd = 0;
 	if (Exif->enableThumb && ThumbnailBuffer && ThumbnailJpegSize) {
 		exifSizeExceptThumb = tmp = LongerTagOffset;
 		memcpy(pNextIfdOffset, &tmp, OFFSET_SIZE);
