@@ -6,12 +6,16 @@
 #include <fcntl.h>
 
 #include <cutils/properties.h>
-#include <cutils/log.h>
+#include <log/log.h>
 #include <cutils/str_parms.h>
 
 #include <hardware/camera.h>
 #include <hardware/camera3.h>
+#ifdef ANDROID_PIE
+#include <CameraMetadata.h>
+#else
 #include <camera/CameraMetadata.h>
+#endif
 
 #include <nx-scaler.h>
 #include <nx-deinterlacer.h>
@@ -24,6 +28,9 @@
 #define getPriv(dev) ((Camera3HWInterface *)(((camera3_device_t *)dev)->priv))
 #define NSEC_PER_33MSEC 33000000LL
 
+#ifdef ANDROID_PIE
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
+#endif
 namespace android {
 
 #define DEFAULT_MAX_HANDLES	2
@@ -441,7 +448,7 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	uint8_t aeMode = ANDROID_CONTROL_AE_MODE_OFF;
 	uint8_t aeLock = ANDROID_CONTROL_AE_LOCK_OFF;
 	uint8_t focusMode = ANDROID_CONTROL_AF_MODE_OFF;
-	uint8_t	edge_mode = ANDROID_EDGE_MODE_FAST;
+	/*uint8_t edge_mode = ANDROID_EDGE_MODE_FAST;*/
 	uint8_t	colorMode = ANDROID_COLOR_CORRECTION_MODE_FAST;
 	uint8_t vsMode = ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
 	uint8_t optStabMode;
@@ -524,9 +531,9 @@ Camera3HWInterface::constructDefaultRequestSettings(int type)
 	metaData.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
 	metaData.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
 	metaData.update(ANDROID_CONTROL_MODE, &controlMode, 1);
-	//metaData.update(ANDROID_EDGE_MODE, &edge_mode, 1);
+	/*metaData.update(ANDROID_EDGE_MODE, &edge_mode, 1);*/
 	metaData.update(ANDROID_COLOR_CORRECTION_ABERRATION_MODE, &cacMode, 1);
-	//metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorMode, 1);
+	/*metaData.update(ANDROID_COLOR_CORRECTION_MODE, &colorMode, 1);*/
 	metaData.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &optStabMode, 1);
 	metaData.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vsMode, 1);
 
@@ -783,7 +790,6 @@ static int getNumberOfCameras(void)
 
 static int getCameraInfo(int camera_id, struct camera_info *info)
 {
-	int ret = 0;
 	int fd;
 
 	ALOGDD("[%s] cameraID:%d", __func__, camera_id);

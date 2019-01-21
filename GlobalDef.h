@@ -66,7 +66,7 @@
 #define NUM_OF_SKIP_FRAMES		0
 #endif
 
-/* #define TRACE_STREAM */
+/*#define TRACE_STREAM*/
 #ifdef TRACE_STREAM
 #define ALOGDD(a...)			ALOGD(a)
 #define ALOGDI(a...)			ALOGD(a)
