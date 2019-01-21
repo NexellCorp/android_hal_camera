@@ -7,7 +7,7 @@
 
 #include <linux/videodev2.h>
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include "GlobalDef.h"
 #include "v4l2.h"
 
