@@ -1,13 +1,18 @@
 #define LOG_TAG "NXStream"
+#include <stdio.h>
 #include <cutils/properties.h>
-#include <cutils/log.h>
+#include <log/log.h>
 #include <cutils/str_parms.h>
 
 #include <sys/mman.h>
 #include <linux/videodev2.h>
 #include <linux/media-bus-format.h>
 #include <libnxjpeg.h>
+#ifdef ANDROID_PIE
+#include <CameraMetadata.h>
+#else
 #include <camera/CameraMetadata.h>
+#endif
 
 #include <gralloc_priv.h>
 
@@ -18,6 +23,9 @@
 #include "metadata.h"
 #include "Stream.h"
 
+#ifdef ANDROID_PIE
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
+#endif
 namespace android {
 
 #define CAMERA_USAGE		GRALLOC_USAGE_HW_CAMERA_WRITE | GRALLOC_USAGE_HW_CAMERA_READ
@@ -26,8 +34,6 @@ namespace android {
 
 static gralloc_module_t const* getModule(void)
 {
-	hw_device_t *dev = NULL;
-	alloc_device_t *device = NULL;
 	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = NULL;
 	hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &pmodule);
@@ -153,7 +159,6 @@ int Stream::deinterlacing(private_handle_t *srcBuf1, private_handle_t *srcBuf2,
 	struct frame_data *pSrcFrame2 = &pInfo.src_bufs[2];
 	struct frame_data *pDstFrame = &pInfo.dst_bufs[0];
 
-	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = getModule();
 	android_ycbcr src1, src2, dst;
 
@@ -296,7 +301,6 @@ int Stream::scaling(private_handle_t *dstBuf, private_handle_t *srcBuf,
 	ALOGDD("[%s:%d:%d] scaling[%d:%d:%d:%d] dst[%d:%d]", __func__, mCameraId, mType,
 			crop[0], crop[1], crop[2], crop[3], dstBuf->width, dstBuf->height);
 
-	hw_module_t const *pmodule = NULL;
 	gralloc_module_t const *module = getModule();
 	android_ycbcr src, dst;
 	struct nx_scaler_context ctx;
@@ -531,14 +535,16 @@ int Stream::skipFrames(void)
 		int h = ph->height;
 
 #ifdef CAMERA_SUPPORT_SCALING
-		getAvaliableResolution(mCameraId, &w, &h);
+		if (mCrop) {
+			w = mCropInfo.width;
+			h = mCropInfo.height;
+		} else
+			getAvaliableResolution(mCameraId, &w, &h);
 		if ((w == ph->width) && (h == ph->height))
 			ALOGDD("[%s:%d:%d] resolution is the same, just copy",
 					__func__, mCameraId, mType);
 #endif
 		if (mInterlaced) {
-			struct frame_data dst_frame;
-
 			for (i = 1; i < MAX_BUFFER_COUNT; i++) {
 				allocBuffer(w, h, ph->format,
 					DEINTERLACER_USAGE,
@@ -675,7 +681,7 @@ int Stream::sendResult()
 
 	if (!mSkip) {
 		private_handle_t *ph;
-		int ret = 0, count = 0;
+		int ret = 0;
 
 		if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf[0]))
 			ph = (private_handle_t *)mTmpBuf[0];
@@ -685,9 +691,14 @@ int Stream::sendResult()
 		if (mScaling)
 		{
 			if (mInterlaced)
-				scaling(ph, buf->getDeinterPrivateHandle(), buf->getMetadata());
+				ret = scaling(ph, buf->getDeinterPrivateHandle(), buf->getMetadata());
 			else
-				scaling(ph, buf->getZoomPrivateHandle(), buf->getMetadata());
+				ret = scaling(ph, buf->getZoomPrivateHandle(), buf->getMetadata());
+			if (ret) {
+				ALOGE("[%s:%d:%d] failed to do scaling:%d", __func__,
+						mCameraId, mType, ret);
+				return ret;
+			}
 		}
 	}
 
@@ -713,8 +724,6 @@ int Stream::sendResult()
 
 void Stream::drainBuffer()
 {
-	int ret = NO_ERROR;
-
 	ALOGDV("[%d] start draining all RQ buffers", mType);
 
 	while (!mQ.isEmpty())
@@ -858,7 +867,11 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 		if (b->format == HAL_PIXEL_FORMAT_BLOB)
 			format = HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED;
 #ifdef CAMERA_SUPPORT_SCALING
-		getAvaliableResolution(mCameraId, &width, &height);
+		if (mCrop) {
+			width = mCropInfo.width;
+			height = mCropInfo.height;
+		} else
+			getAvaliableResolution(mCameraId, &width, &height);
 		if ((width == b->width) && (height == b->height))
 			ALOGDD("[%s:%d:%d] resolution is the same, just copy",
 				__func__, mCameraId, mType);
@@ -902,10 +915,12 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 		if (!mZmBuf[count])
 			ALOGE("[%s:%d:%d] mZmBuf[%d]:%p is invalid\n", __func__,
 					mCameraId, mType, count, mZmBuf[count]);
+#ifdef TRACE_STREAM
 		private_handle_t *z = (private_handle_t*)mZmBuf[count];
 		ALOGDD("[%s:%d:%d] format:0x%x, width:%d, height:%d size:%d buffer count:%d",
 				__func__, mCameraId, mType, z->format, z->width,
 				z->height, z->size, count);
+#endif
 		if (mInterlaced)
 			buffer->init(fNum, buf->stream, buf->buffer, mZmBuf[count], mDeinterBuf[count], meta);
 		else
@@ -927,7 +942,7 @@ status_t Stream::prepareForRun()
 	int ret = -EINVAL, dma_fd = 0;
 	private_handle_t *ph = NULL;
 	buffer_handle_t buffer;
-	int width, height, format, buf_count = 0;
+	int width, height, format;
 
 	ALOGDV("[%s:%d:%d]", __func__, mCameraId, mType);
 
@@ -1007,7 +1022,11 @@ status_t Stream::prepareForRun()
 		height = ph->height;
 
 #ifdef CAMERA_SUPPORT_SCALING
-		getAvaliableResolution(mCameraId, &width, &height);
+		if (mCrop) {
+			width = mCropInfo.width;
+			height = mCropInfo.height;
+		} else
+			getAvaliableResolution(mCameraId, &width, &height);
 		if ((width == ph->width) && (height == ph->height))
 			ALOGDD("[%s:%d:%d] resolution is the same, just copy",
 					__func__, mCameraId, mType);
@@ -1136,8 +1155,6 @@ int Stream::dQBuf(int *dqIndex)
 			mCameraId, mType, *dqIndex, fd);
 
 	if (mInterlaced && mScaling) {
-		int count = 0, index = *dqIndex;
-		struct frame_data frame;
 		NXCamera3Buffer *buf = mRQ.getHead();
 
 		if (!buf) {
@@ -1211,7 +1228,7 @@ int Stream::qBuf(NXCamera3Buffer *buf)
 
 bool Stream::threadLoop()
 {
-	int dqIndex = 0, qSize = 0, i;
+	int dqIndex = 0, qSize = 0;
 	int ret = NO_ERROR;
 
 	ALOGDV("[%s:%d:%d] mQ:%zu, mRQ:%zu", __func__, mCameraId,
