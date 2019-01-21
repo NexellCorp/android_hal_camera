@@ -1,14 +1,21 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cutils/log.h>
+#include <log/log.h>
 
+#ifdef ANDROID_PIE
+#include <CameraMetadata.h>
+#else
 #include <camera/CameraMetadata.h>
+#endif
 
 #include "GlobalDef.h"
 #include "v4l2.h"
 #include "metadata.h"
 
+#ifdef ANDROID_PIE
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
+#endif
 namespace android {
 
 #define MAX_SYNC_LATENCY 4
@@ -168,7 +175,6 @@ static uint32_t getFrameInfo(uint32_t id, int fd, struct nx_sensor_info *s)
 	int r = 0, ret = 0;
 
 	ALOGDI("[%s] Camera:%d Information", __func__, id);
-	(void)(id);
 
 	ret = v4l2_get_crop(fd, &s->crop);
 	if (ret)
@@ -179,6 +185,7 @@ static uint32_t getFrameInfo(uint32_t id, int fd, struct nx_sensor_info *s)
 				s->crop.top,
 				s->crop.width,
 				s->crop.height);
+	(void)(id);
 
 	for (int j = 0; j < MAX_SUPPORTED_RESOLUTION; j++) {
 		s->frames[r].index = j;
@@ -939,7 +946,9 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 	if (meta.exists(ANDROID_CONTROL_AF_TRIGGER) &&
 	meta.exists(ANDROID_CONTROL_AF_TRIGGER_ID)) {
 		uint8_t trigger = meta.find(ANDROID_CONTROL_AF_TRIGGER).data.u8[0];
+#ifdef TRACE_STREAM
 		int32_t trigger_id = meta.find(ANDROID_CONTROL_AF_TRIGGER_ID).data.i32[0];
+#endif
 		uint8_t afState;
 
 		metaData.update(ANDROID_CONTROL_AF_TRIGGER, &trigger, 1);
@@ -1003,16 +1012,18 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 	}
 	if (meta.exists(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER) &&
 		meta.exists(ANDROID_CONTROL_AE_PRECAPTURE_ID)) {
-		uint8_t trigger = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER).data.u8[0];
-		uint8_t trigger_id = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_ID).data.u8[0];
 		uint8_t aeState;
+		uint8_t trigger = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER).data.u8[0];
+#ifdef TRACE_STREAM
+		uint8_t trigger_id = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_ID).data.u8[0];
+#endif
 
 		ALOGDV("ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER:%d, ID:%d", trigger, trigger_id);
 		metaData.update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &trigger, 1);
 		if (trigger == ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_START) {
 			aeState = ANDROID_CONTROL_AE_STATE_LOCKED;
-			//uint8_t aeState = ANDROID_CONTROL_AE_STATE_CONVERGED;
-			//metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
+			/*uint8_t aeState = ANDROID_CONTROL_AE_STATE_CONVERGED;
+			metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);*/
 		} else {
 			aeState = ANDROID_CONTROL_AE_STATE_INACTIVE;
 			metaData.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
