@@ -1258,7 +1258,7 @@ bool Stream::threadLoop()
 		goto stop;
 
 	qSize = mQ.size();
-	if (qSize > 0) {
+	for (int i = 0; i < qSize; i++) {
 		NXCamera3Buffer *buf = mQ.getHead();
 		ALOGDV("[%d:%d] mQ.dequeue:%p, mQIndex:%d", mCameraId, mType, buf, mQIndex);
 		ret = qBuf(buf);
@@ -1270,7 +1270,8 @@ bool Stream::threadLoop()
 		ALOGDV("[%d:%d] qbuf index:%d", mCameraId, mType, mQIndex);
 		mRQ.queue(mQ.dequeue());
 		setQIndex(mQIndex+1);
-	} else {
+	}
+	if (qSize <= 0) {
 		ALOGDV("[%d:%d] underflow of input", mCameraId, mType);
 		ALOGDV("[%d:%d] InputSize:%zu, QueuedSize:%zu, DequeuedSize:%d",
 				mCameraId, mType, mQ.size(), mRQ.size(), mDQ.size());
