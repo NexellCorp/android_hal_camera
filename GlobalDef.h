@@ -1,8 +1,8 @@
 #ifndef GLOBAL_DEF_H
 #define GLOBAL_DEF_H
 
-/* MAX_BUFFER_COUNT musb be bigger than 1 and smaller than 4 for deinterlacing */
-#define MAX_BUFFER_COUNT		3
+/* MAX_BUFFER_COUNT must be at least 2 */
+#define MAX_BUFFER_COUNT		4
 #define NX_MAX_STREAM			4
 #define MAX_VIDEO_HANDLES		2
 
