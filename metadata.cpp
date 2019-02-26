@@ -918,7 +918,7 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 
 	meta = request;
 
-	ALOGDV("[%s] Exif:%s, timestamp:%ld, pipeline:%d", __func__,
+	ALOGDV("[%s] Exif:%s, timestamp:%lld, pipeline:%d", __func__,
 			(exif) ? "exist" : "null", timestamp, pipeline_depth);
 
 	if (meta.exists(ANDROID_REQUEST_ID)) {
@@ -946,9 +946,6 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 	if (meta.exists(ANDROID_CONTROL_AF_TRIGGER) &&
 	meta.exists(ANDROID_CONTROL_AF_TRIGGER_ID)) {
 		uint8_t trigger = meta.find(ANDROID_CONTROL_AF_TRIGGER).data.u8[0];
-#ifdef TRACE_STREAM
-		int32_t trigger_id = meta.find(ANDROID_CONTROL_AF_TRIGGER_ID).data.i32[0];
-#endif
 		uint8_t afState;
 
 		metaData.update(ANDROID_CONTROL_AF_TRIGGER, &trigger, 1);
@@ -1014,11 +1011,10 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 		meta.exists(ANDROID_CONTROL_AE_PRECAPTURE_ID)) {
 		uint8_t aeState;
 		uint8_t trigger = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER).data.u8[0];
-#ifdef TRACE_STREAM
 		uint8_t trigger_id = meta.find(ANDROID_CONTROL_AE_PRECAPTURE_ID).data.u8[0];
-#endif
 
 		ALOGDV("ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER:%d, ID:%d", trigger, trigger_id);
+		(void)(trigger_id);
 		metaData.update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &trigger, 1);
 		if (trigger == ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_START) {
 			aeState = ANDROID_CONTROL_AE_STATE_LOCKED;
@@ -1145,7 +1141,7 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 	if (meta.exists(ANDROID_SENSOR_EXPOSURE_TIME)) {
 		int64_t sensorExpTime =
 			meta.find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
-		ALOGDV("ANDROID_SENSOR_EXPOSURE_TIME:%ld", sensorExpTime);
+		ALOGDV("ANDROID_SENSOR_EXPOSURE_TIME:%lld", sensorExpTime);
 		metaData.update(ANDROID_SENSOR_EXPOSURE_TIME, &sensorExpTime, 1);
 		if (exif)
 			exif->setExposureTime(sensorExpTime);
@@ -1159,7 +1155,7 @@ camera_metadata_t* translateMetadata (uint32_t id, const camera_metadata_t *requ
 			ALOGDI("minFrame:%lld", minFrameDuration);
 			minFrameDuration = (long) 1e9/ minFrameDuration;
 		}
-		ALOGDV("ANDROID_SENSOR_FRAME_DURATION:%ld, Min:%lld",
+		ALOGDV("ANDROID_SENSOR_FRAME_DURATION:%lld, Min:%lld",
 				sensorFrameDuration, minFrameDuration);
 		if (sensorFrameDuration < minFrameDuration)
 			sensorFrameDuration = minFrameDuration;
