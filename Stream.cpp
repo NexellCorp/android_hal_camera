@@ -753,7 +753,7 @@ void Stream::stopV4l2()
 	if (ret)
 		ALOGE("Failed to req buf:%d", ret);
 
-	mQIndex = 0;
+	setQIndex(0);
 	ALOGDV("[%s:%d:%d] exit", __func__, mCameraId, mType);
 }
 
@@ -774,6 +774,7 @@ void Stream::stopStreaming()
 		stopV4l2();
 	}
 
+	setBufIndex(0);
 	freeAllBuffers();
 
 	ALOGDD("[%s:%d:%d] Exit", __func__, mCameraId, mType);
