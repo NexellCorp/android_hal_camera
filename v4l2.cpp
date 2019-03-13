@@ -18,7 +18,7 @@ int v4l2_set_format(int fd, uint32_t f, uint32_t w, uint32_t h,
 {
 	struct v4l2_format v4l2_fmt;
 
-	ALOGV("[%s]\n", __func__);
+	ALOGDV("[%s]\n", __func__);
 
 	bzero(&v4l2_fmt, sizeof(struct v4l2_format));
 
@@ -34,7 +34,7 @@ int v4l2_set_format(int fd, uint32_t f, uint32_t w, uint32_t h,
 		plane_fmt = &v4l2_fmt.fmt.pix_mp.plane_fmt[i];
 		plane_fmt->sizeimage = sizes[i];
 		plane_fmt->bytesperline = strides[i];
-		ALOGV("[%d] strides=%d, size=%d\n", i, strides[i], sizes[i]);
+		ALOGDV("[%d] strides=%d, size=%d\n", i, strides[i], sizes[i]);
 	}
 
 	return ioctl(fd, VIDIOC_S_FMT, &v4l2_fmt);
@@ -81,7 +81,7 @@ int v4l2_dqbuf(int fd, int *index, int32_t dma_fd[], uint32_t num_planes)
 	struct v4l2_plane planes[num_planes];
 	int ret;
 
-	ALOGV("[%s]", __func__);
+	ALOGDV("[%s]dqIndex", __func__);
 
 	bzero(&buf, sizeof(struct v4l2_buffer));
 	bzero(planes, sizeof(struct v4l2_plane)*num_planes);
