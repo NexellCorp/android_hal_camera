@@ -1141,7 +1141,7 @@ int Stream::dQBuf(int *dqIndex)
 	int ret = 0, fd = 0;
 
 	if (mSkip) {
-		usleep(30000);
+		usleep(5000);
 		dqIndex = 0;
 		ALOGDV("[%s:%d:%d] skip v4l2 dequeue", __func__, mCameraId, mType);
 		return ret;
