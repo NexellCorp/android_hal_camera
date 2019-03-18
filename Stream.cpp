@@ -1203,7 +1203,6 @@ int Stream::qBuf(NXCamera3Buffer *buf)
 	int ret = 0, dma_fd = 0;
 
 	if (mSkip) {
-		usleep(30000);
 		ALOGDV("[%s:%d:%d] skip v4l2 queue", __func__, mCameraId, mType);
 		return ret;
 	}
