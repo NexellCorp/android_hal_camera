@@ -1,7 +1,7 @@
 #ifndef GLOBAL_DEF_H
 #define GLOBAL_DEF_H
 
-/* MAX_BUFFER_COUNT must be at least 2 */
+/* MAX_BUFFER_COUNT must be at least 2 otherwise it fails to qbuf*/
 #define MAX_BUFFER_COUNT		4
 #define NX_MAX_STREAM			4
 #define MAX_VIDEO_HANDLES		2
