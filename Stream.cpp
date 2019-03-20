@@ -26,6 +26,12 @@
 #include "metadata.h"
 #include "Stream.h"
 
+#define DURATION_CHECK
+#ifdef DURATION_CHECK
+#include <time.h>
+#define MAX_DURATION		35
+#endif
+
 #define TIME_MSEC		1000000 /*1ms*/
 #define THREAD_TIMEOUT		1000000000 /*1sec*/
 
@@ -1155,6 +1161,11 @@ int Stream::dQBuf(int *dqIndex)
 		return ret;
 	}
 
+#ifdef DURATION_CHECK
+	struct timeval	start, end, gap;
+
+	gettimeofday(&start, NULL);
+#endif
 	ret = v4l2_dqbuf(mFd, dqIndex, &fd, 1);
 	if (ret) {
 		ALOGE("[%s:%d:%d] Failed to dqbuf:%d", __func__, mCameraId,
@@ -1205,6 +1216,24 @@ int Stream::dQBuf(int *dqIndex)
 			return 0;
 		}
 	}
+#ifdef DURATION_CHECK
+	gettimeofday(&end, NULL);
+	{
+		long msec;
+
+		gap.tv_sec = end.tv_sec - start.tv_sec;
+		gap.tv_usec = end.tv_usec - start.tv_usec;
+
+		if (gap.tv_usec < 0) {
+			gap.tv_sec = gap.tv_sec - 1;
+			gap.tv_usec = gap.tv_usec + 1000000;
+		}
+		msec = gap.tv_usec/1000 + gap.tv_sec*1000;
+		if (msec > MAX_DURATION)
+			ALOGE("[%s:%d:%d] duration is too long:%ld for buf:%d\n",
+					__func__, mCameraId, mType, msec, *dqIndex);
+	}
+#endif
 	return ret;
 }
 
