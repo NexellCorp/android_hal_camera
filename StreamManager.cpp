@@ -1,8 +1,10 @@
 #define LOG_TAG "NXStreamManager"
 #include <cutils/properties.h>
-#include <log/log.h>
 #include <cutils/str_parms.h>
-
+#include <utils/Condition.h>
+#include <utils/Mutex.h>
+#include <utils/Thread.h>
+#include <log/log.h>
 #include <sys/mman.h>
 
 #include <hardware/camera.h>
@@ -11,14 +13,17 @@
 #else
 #include <camera/CameraMetadata.h>
 #endif
+
 #include <linux/videodev2.h>
 #include <linux/media-bus-format.h>
 #include <libnxjpeg.h>
 
-#include <nx-scaler.h>
 #include "GlobalDef.h"
 #include "metadata.h"
 #include "StreamManager.h"
+
+#define TIME_MSEC		1000000  /*1ms*/
+#define THREAD_TIMEOUT		30000000 /*30ms*/
 
 /*#define VERIFY_FRIST_FRAME*/
 #ifdef VERIFY_FRIST_FRAME
@@ -39,11 +44,7 @@ void StreamManager::setCaptureResult(uint32_t type, NXCamera3Buffer *buf)
 		ALOGE("[%s:%d] Invalid type", __func__, mCameraId);
 	else {
 		mResultQ[type].queue(buf);
-		if (!isRunning()) {
-			ALOGDV("[%s:%d] START StreamManager Thread", __func__,
-					mCameraId);
-			run("StreamManagerThread");
-		}
+		mWakeUp.signal();
 	}
 }
 
@@ -97,6 +98,7 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 	int count = getRunningStreamsCount();
 	Stream *stream = NULL;
 	bool	skip = false;
+	char	name[32] = {0, };
 
 	stream = (Stream *)s->priv;
 	if (stream == NULL) {
@@ -112,9 +114,10 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 			if (stream->skipFrames())
 				goto fail;
 		}
-		if (stream->prepareForRun() == NO_ERROR)
-			stream->run("Stream[%d] Thread", stream->getMode());
-		else
+		if (stream->prepareForRun() == NO_ERROR) {
+			sprintf(name, "Stream[%d] Thread", stream->getMode());
+			stream->run(name, PRIORITY_DEFAULT);
+		} else
 			goto fail;
 	} else {
 		for (int j = 0; j < NX_MAX_STREAM; j++)
@@ -142,9 +145,10 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 			if (stream->skipFrames())
 				goto fail;
 		}
-		if (stream->prepareForRun() == NO_ERROR)
-			stream->run("Stream[%d] Thread", stream->getMode());
-		else
+		if (stream->prepareForRun() == NO_ERROR) {
+			sprintf(name, "Stream[%d] Thread", stream->getMode());
+			stream->run(name, PRIORITY_DEFAULT);
+		} else
 			goto fail;
 	}
 	return 0;
@@ -244,6 +248,11 @@ int StreamManager::registerRequests(camera3_capture_request_t *r)
 	request->input_buffer = r->input_buffer;
 	mRequestQ.queue(request);
 	mMeta = meta;
+	if (!isRunning()) {
+		ALOGDV("[%s:%d] START StreamManager Thread", __func__,
+				mCameraId);
+		run("StreamManagerThread", PRIORITY_DEFAULT);
+	}
 	return ret;
 }
 
@@ -279,6 +288,7 @@ int StreamManager::stopStream()
 #endif
 	ALOGDD("[%s:%d]", __func__, mCameraId);
 	if (isRunning()) {
+		mWakeUp.signal();
 		ALOGDV("[%s:%d] requestExitAndWait Enter", __func__, mCameraId);
 		requestExitAndWait();
 		ALOGDV("[%s:%d] requestExitAndWait Exit", __func__, mCameraId);
@@ -433,7 +443,6 @@ int StreamManager::sendResult(void)
 	result.input_buffer = request->input_buffer;
 	ALOGDI("[%s:%d] frame_number:%d, num_output_buffers:%d", __func__,
 			mCameraId, result.frame_number, result.num_output_buffers);
-
 	mCb->process_capture_result(mCb, &result);
 	request = mRequestQ.dequeue();
 	if (request) {
@@ -466,23 +475,39 @@ status_t StreamManager::readyToRun()
 
 bool StreamManager::threadLoop()
 {
-	if (mRequestQ.size() > 0)
-	{
+	if (mRequestQ.size() > 0) {
 		nx_camera_request_t *request = mRequestQ.getHead();
 		if (!request) {
 			ALOGE("[%s:%d] Failed to get request from Queue",
 				__func__, mCameraId);
-		return false;
+			return false;
+		}
 	}
+
 	uint32_t frame_number = request->frame_number;
 	uint32_t num_buffers = request->num_output_buffers;
 	if (mNumBuffers)
 		num_buffers = mNumBuffers;
+
+	if (exitPending())
+		return false;
+
+	if(!mResultQ[0].size() && !mResultQ[1].size() && !mResultQ[2].size()) {
+		int ret;
+
+		ALOGDV("[%s:%d] wait", __func__, mCameraId);
+		ret = mWakeUp.waitRelative(mLock, THREAD_TIMEOUT);
+		if (ret == TIMED_OUT)
+			ALOGE("[%s:%d] Wait Timeout:%dms", __func__,
+					mCameraId,
+					THREAD_TIMEOUT/TIME_MSEC);
+		ALOGDV("[%s:%d] release", __func__, mCameraId);
+	}
+
 	for (int i = 0; i < NX_MAX_STREAM; i++) {
 		int size = mResultQ[i].size();
 		if (size > 0) {
-			NXCamera3Buffer *buf =
-			mResultQ[i].getHead();
+			NXCamera3Buffer *buf = mResultQ[i].getHead();
 			if ((buf) && (buf->getFrameNumber() == frame_number)) {
 				ALOGDV("[%s:%d] got a buffer for the frame_buffer:%d from %d",
 						__func__, mCameraId, frame_number, i);
@@ -499,7 +524,6 @@ bool StreamManager::threadLoop()
 					break;
 				} else
 					mNumBuffers = num_buffers;
-				}
 			}
 		}
 	}

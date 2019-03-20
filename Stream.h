@@ -16,18 +16,7 @@
 #ifndef STREAM_H
 #define STREAM_H
 
-#include <utils/Condition.h>
-#include <utils/Errors.h>
-#include <utils/List.h>
-#include <utils/Mutex.h>
-#include <utils/Thread.h>
-
-#include <hardware/camera3.h>
-
-#include <gralloc_priv.h>
-
 #include "NXQueue.h"
-#include "ExifProcessor.h"
 #include "v4l2.h"
 
 namespace android {
@@ -193,9 +182,6 @@ public:
 	void setQIndex(int index) {
 		mQIndex = index % mMaxBufIndex;
 	}
-	uint32_t getQIndex() {
-		return mQIndex;
-	}
 	void setSkipFlag(bool skip) {
 		mSkip = skip;
 	}
@@ -270,6 +256,7 @@ private:
 	NXQueue<NXCamera3Buffer *>mRQ;
 	NXQueue<NXCamera3Buffer *>mDQ;
 	Mutex mLock;
+	Condition mWakeUp;
 	NXCamera3Buffer mBuffers[MAX_BUFFER_COUNT+2];
 	struct v4l2_crop_info mCropInfo;
 

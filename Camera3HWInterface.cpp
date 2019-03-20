@@ -5,9 +5,10 @@
 #include <string.h>
 #include <fcntl.h>
 
-#include <cutils/properties.h>
 #include <log/log.h>
+#include <cutils/properties.h>
 #include <cutils/str_parms.h>
+#include <utils/Thread.h>
 
 #include <hardware/camera.h>
 #include <hardware/camera3.h>
@@ -752,7 +753,7 @@ int Camera3HWInterface::flush()
 int Camera3HWInterface::cameraDeviceClose()
 {
 	ALOGDD("[%s:%d]", __func__, mCameraId);
-	if ((mStreamManager != NULL) && (mStreamManager->isRunning())) {
+	if (mStreamManager != NULL) {
 		mStreamManager->stopStream();
 		mStreamManager.clear();
 		mStreamManager = NULL;
