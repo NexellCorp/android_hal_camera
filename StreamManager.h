@@ -17,8 +17,6 @@
 #define STREAM_MANAGER_H
 
 #include "Stream.h"
-#include "ExifProcessor.h"
-
 
 namespace android {
 
@@ -99,6 +97,8 @@ private:
 	uint8_t mPipeLineDepth;
 	const camera_metadata_t *mMeta;
 	sp<Stream> mStream[NX_MAX_STREAM];
+	Mutex mLock;
+	Condition	mWakeUp;
 
 }; /* StreamManager */
 
