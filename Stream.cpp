@@ -1,10 +1,13 @@
 #define LOG_TAG "NXStream"
 #include <stdio.h>
-#include <cutils/properties.h>
 #include <log/log.h>
+#include <cutils/properties.h>
 #include <cutils/str_parms.h>
-
+#include <utils/Condition.h>
+#include <utils/Mutex.h>
+#include <utils/Thread.h>
 #include <sys/mman.h>
+
 #include <linux/videodev2.h>
 #include <linux/media-bus-format.h>
 #include <libnxjpeg.h>
@@ -13,15 +16,18 @@
 #else
 #include <camera/CameraMetadata.h>
 #endif
+#include <hardware/camera3.h>
 
+#include "ExifProcessor.h"
 #include <gralloc_priv.h>
-
 #include <nx-deinterlacer.h>
 #include <nx-scaler.h>
 #include "GlobalDef.h"
-#include "v4l2.h"
 #include "metadata.h"
 #include "Stream.h"
+
+#define TIME_MSEC		1000000 /*1ms*/
+#define THREAD_TIMEOUT		1000000000 /*1sec*/
 
 #ifdef ANDROID_PIE
 using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
@@ -763,6 +769,7 @@ void Stream::stopStreaming()
 			mQ.size(), mRQ.size(), mDQ.size());
 
 	if (isRunning()) {
+		mWakeUp.signal();
 		ALOGDV("[%s:%d:%d] requestExitAndWait Enter", __func__, mCameraId, mType);
 		requestExitAndWait();
 		ALOGDV("[%s:%d:%d] requestExitAndWait Exit", __func__, mCameraId, mType);
@@ -931,8 +938,10 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 			__func__, mCameraId, mType, b->format, b->width,
 			b->height, b->size);
 	mQ.queue(buffer);
-	if (isRunning())
+	if (isRunning()) {
 		setBufIndex(getBufIndex()+1);
+		mWakeUp.signal();
+	}
 	return ret;
 }
 
@@ -962,7 +971,7 @@ status_t Stream::prepareForRun()
 		goto drain;
 	}
 
-	ALOGD("[%s:%d] bufferCount:%d", __func__, mType, bufferCount);
+	ALOGDD("[%s:%d] bufferCount:%d", __func__, mType, bufferCount);
 	if (mSkip) {
 		for (i = 0; i < bufferCount; i++) {
 			buf = mQ.dequeue();
@@ -1145,6 +1154,7 @@ int Stream::dQBuf(int *dqIndex)
 		ALOGDV("[%s:%d:%d] skip v4l2 dequeue", __func__, mCameraId, mType);
 		return ret;
 	}
+
 	ret = v4l2_dqbuf(mFd, dqIndex, &fd, 1);
 	if (ret) {
 		ALOGE("[%s:%d:%d] Failed to dqbuf:%d", __func__, mCameraId,
@@ -1270,13 +1280,20 @@ bool Stream::threadLoop()
 		mRQ.queue(mQ.dequeue());
 		setQIndex(mQIndex+1);
 	}
+
 	if (qSize <= 0) {
 		ALOGDV("[%d:%d] underflow of input", mCameraId, mType);
 		ALOGDV("[%d:%d] InputSize:%zu, QueuedSize:%zu, DequeuedSize:%d",
-				mCameraId, mType, mQ.size(), mRQ.size(), mDQ.size());
-		if (mQ.size() == 0 && mRQ.size() == 0) {
+				mCameraId, mType, qSize, mRQ.size(), mDQ.size());
+		if (mQ.size() == 0 && mRQ.size() == 0 && !exitPending()) {
 			ALOGDV("[%d:%d] NO BUFFER --- wait for stopping", mCameraId, mType);
-			usleep(10000);
+			ret = mWakeUp.waitRelative(mLock, THREAD_TIMEOUT);
+			if (ret == TIMED_OUT)
+				ALOGE("[%d:%d] Wait Timeout:%dms",
+						mCameraId, mType,
+						THREAD_TIMEOUT/TIME_MSEC);
+			else
+				ALOGDV("[%d:%d] BUFFER IN", mCameraId, mType);
 		}
 	}
 
