@@ -42,6 +42,34 @@ struct nx_sensor_info {
 struct nx_sensor_info sensor_supported_lists[NUM_OF_CAMERAS] =
 {{{{0, 0, 0, {0, }}, }, {0, 0, 0, 0}}, };
 
+int getJpegResolution(uint32_t id, uint32_t size,
+		uint32_t *width, uint32_t *height)
+{
+	int ret = 0;
+#ifdef CAMERA_SUPPORT_SCALING
+	int i;
+	struct v4l2_frame_info *s = &supported_lists[id];
+	int list_size = sizeof(supported_lists)/sizeof(struct v4l2_frame_info);
+
+	for (i = 0; i < list_size; i ++) {
+		if (size == s->width*s->height*3) {
+			*width = s->width;
+			*height = s->height;
+			break;
+		}
+	}
+	if (i == list_size)
+		ret = 1;
+#else
+	ret = 1;
+	(void)(width);
+	(void)(height);
+	(void)(id);
+	(void)(size);
+#endif
+	return ret;
+}
+
 bool isSupportedResolution(uint32_t id, uint32_t width, uint32_t height)
 {
 	bool ret = false;
