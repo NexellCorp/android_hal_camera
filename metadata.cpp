@@ -42,6 +42,36 @@ struct nx_sensor_info {
 struct nx_sensor_info sensor_supported_lists[NUM_OF_CAMERAS] =
 {{{{0, 0, 0, {0, }}, }, {0, 0, 0, 0}}, };
 
+int getJpegResolution(uint32_t id, uint32_t size,
+		uint32_t *width, uint32_t *height)
+{
+	int ret = 0;
+#ifdef CAMERA_SUPPORT_SCALING
+	int i;
+	struct v4l2_frame_info *s = NULL;
+	int list_size = sizeof(supported_lists)/sizeof(struct v4l2_frame_info);
+
+	for (i = 0; i < list_size; i ++) {
+		s = &supported_lists[i];
+		if (size == JPEG_SIZE(s->width, s->height)) {
+			*width = s->width;
+			*height = s->height;
+			ALOGDD("[%s:%d] width:%d, height:%d", __func__, id, *width, *height);
+			break;
+		}
+	}
+	if (i == list_size)
+		ret = 1;
+#else
+	ret = 1;
+	(void)(width);
+	(void)(height);
+	(void)(id);
+	(void)(size);
+#endif
+	return ret;
+}
+
 bool isSupportedResolution(uint32_t id, uint32_t width, uint32_t height)
 {
 	bool ret = false;
@@ -447,14 +477,12 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 				break;
 			} else if ((supported_lists[j].width * supported_lists[j].height) >
 					(sensor_lists[i].width * sensor_lists[i].height)) {
-				if ((sensor_lists[i].width / 32) == 0) {
 					lists[count].index = count;
 					lists[count].width = sensor_lists[i].width;
 					lists[count].height = sensor_lists[i].height;
 					lists[count].interval[0] = sensor_lists[i].interval[0];
 					lists[count].interval[1] = sensor_lists[i].interval[1];
 					count++;
-				}
 				break;
 			} else if ((supported_lists[j].width * supported_lists[j].height) <
 					(sensor_lists[i].width * sensor_lists[i].height)) {
@@ -468,17 +496,12 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 		}
 #endif
 		if (j == list_size) {
-#ifdef CAMERA_SUPPORT_SCALING
-			if ((sensor_lists[i].width / 32) == 0)
-#endif
-			{
-				lists[count].index = count;
-				lists[count].width = sensor_lists[i].width;
-				lists[count].height = sensor_lists[i].height;
-				lists[count].interval[0] = sensor_lists[i].interval[0];
-				lists[count].interval[1] = sensor_lists[i].interval[1];
-				count++;
-			}
+			lists[count].index = count;
+			lists[count].width = sensor_lists[i].width;
+			lists[count].height = sensor_lists[i].height;
+			lists[count].interval[0] = sensor_lists[i].interval[0];
+			lists[count].interval[1] = sensor_lists[i].interval[1];
+			count++;
 		}
 	}
 
