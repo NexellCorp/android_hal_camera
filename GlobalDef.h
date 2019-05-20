@@ -6,6 +6,8 @@
 #define NX_MAX_STREAM			4
 #define MAX_VIDEO_HANDLES		2
 
+#define MAX_JPEG_BUFFER_COUNT		3
+
 #ifdef BOARD_CAMERA_NUM
 #define NUM_OF_CAMERAS			BOARD_CAMERA_NUM
 #else

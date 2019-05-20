@@ -147,9 +147,10 @@ public:
 			for (uint32_t i = 0; i < MAX_BUFFER_COUNT + 2; i++) {
 				if (i < MAX_BUFFER_COUNT) {
 					mZmBuf[i] = NULL;
-					mTmpBuf[i] = NULL;
 					mDeinterBuf[i] = NULL;
 				}
+				if (i < MAX_JPEG_BUFFER_COUNT)
+					mJpgBuf[i] = NULL;
 				mFQ.queue(&mBuffers[i]);
 			}
 #if defined(CAMERA_USE_ZOOM) || defined(CAMERA_SUPPORT_SCALING)
@@ -239,7 +240,7 @@ private:
 	ExifProcessor mExifProcessor;
 	const nx_camera3_callback_ops_t *mCb;
 	const camera3_stream_t * mStream;
-	buffer_handle_t mTmpBuf[MAX_BUFFER_COUNT];
+	buffer_handle_t mJpgBuf[MAX_JPEG_BUFFER_COUNT];
 	buffer_handle_t mZmBuf[MAX_BUFFER_COUNT];
 	buffer_handle_t mDeinterBuf[MAX_BUFFER_COUNT];
 	uint32_t mType;

@@ -420,6 +420,10 @@ int StreamManager::sendResult(void)
 				if (copy == NULL)
 					copy = preview;
 				if (stream->getFormat() == HAL_PIXEL_FORMAT_BLOB) {
+						ALOGE("[%s:%d] width-%d:%d, height:%d-%d", __func__,
+								mCameraId, stream->getWidth(),
+								stream->getHeight(),
+								copy->width, copy->height);
 					if ((stream->getWidth() != (uint32_t)copy->width) ||
 						(stream->getHeight() != (uint32_t)copy->height)) {
 						ALOGE("[%s:%d] Resolution is different", __func__,

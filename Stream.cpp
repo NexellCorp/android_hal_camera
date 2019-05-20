@@ -35,6 +35,8 @@
 #define TIME_MSEC		1000000 /*1ms*/
 #define THREAD_TIMEOUT		1000000000 /*1sec*/
 
+#define JPEG_SIZE(w,h)		w*h*3
+
 #ifdef ANDROID_PIE
 using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
 #endif
@@ -89,9 +91,9 @@ void Stream::freeAllBuffers(void)
 				mDeinterBuf[i] = NULL;
 			}
 		}
-		if (mTmpBuf[i]) {
-			mAllocator->free(mAllocator, (buffer_handle_t)mTmpBuf[i]);
-			mTmpBuf[i] = NULL;
+		if ((i < MAX_JPEG_BUFFER_COUNT) && mJpgBuf[i]) {
+			mAllocator->free(mAllocator, (buffer_handle_t)mJpgBuf[i]);
+			mJpgBuf[i] = NULL;
 		}
 	}
 }
@@ -398,6 +400,27 @@ int Stream::jpegEncoding(private_handle_t *dst, private_handle_t *src, exif_attr
 		ALOGE("[%s] Exif is NULL", __func__);
 		return -EINVAL;
 	}
+
+	if (dst->size != JPEG_SIZE(src->width, src->height)) {
+#ifdef CAMERA_SUPPORT_SCALING
+		ALOGDD("need scaling from %d:%d to %d:%d",
+				src->width, src->height, dst->width, dst->height);
+		if (mJpgBuf[MAX_JPEG_BUFFER_COUNT-1] != NULL) {
+			ret = scaling((private_handle_t*)mJpgBuf[MAX_JPEG_BUFFER_COUNT-1], src, NULL);
+			if (ret) {
+				ALOGE("[%s:%d:%d] failed to do scaling:%d", __func__,
+						mCameraId, mType, ret);
+				return ret;
+			}
+			src = (private_handle_t*)mJpgBuf[MAX_JPEG_BUFFER_COUNT-1];
+		} else
+			ALOGE("jpeg buffer is NULL, Can't scale");
+#else
+		ALOGE("src buf size(%d) isn't the same with dst buf size(%d)",
+				JPEG_SIZE(src->width, src->height), JPEG_SIZE(dst->width, dst->height));
+		return -EINVAL;
+#endif
+	}
 	ALOGDD("start jpegEncoding src width:%d, height:%d", src->width, src->height);
 
 	ret = module->lock(module, dst, LOCK_USAGE, 0, 0,
@@ -476,7 +499,6 @@ unlock:
 		ALOGE("Failed to gralloc unlock for src:%d\n", ret);
 		return ret;
 	}
-
 	ALOGDV("end jpegEncoding");
 	return ret;
 }
@@ -695,8 +717,8 @@ int Stream::sendResult()
 		private_handle_t *ph;
 		int ret = 0;
 
-		if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf[0]))
-			ph = (private_handle_t *)mTmpBuf[0];
+		if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mJpgBuf[0]))
+			ph = (private_handle_t *)mJpgBuf[0];
 		else
 			ph = buf->getPrivateHandle();
 
@@ -714,7 +736,7 @@ int Stream::sendResult()
 		}
 	}
 
-	if (!mSkip && (mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf[mQIndex])) {
+	if (!mSkip && (mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mJpgBuf[mQIndex])) {
 		exif_attribute_t *exif = new exif_attribute_t();
 		uint32_t crop[4] = {0, };
 		translateMetadata(mCameraId, buf->getMetadata(), exif, 0, 0);
@@ -722,7 +744,7 @@ int Stream::sendResult()
 			exif->setCropResolution(crop[0], crop[1], crop[2], crop[3]);
 		else
 			exif->setCropResolution(0, 0, mStream->width, mStream->height);
-		jpegEncoding(buf->getPrivateHandle(), (private_handle_t*)mTmpBuf[mQIndex], exif);
+		jpegEncoding(buf->getPrivateHandle(), (private_handle_t*)mJpgBuf[mQIndex], exif);
 	}
 	mCb->capture_result(mCb, mType, buf);
 	if (mInterlaced && mScaling)
@@ -806,7 +828,7 @@ int Stream::setBufferFormat(private_handle_t *buf)
 	uint32_t sizes[num_planes];
 
 	ret = module->lock_ycbcr(module, buf, LOCK_USAGE, 0, 0,
-	buf->width, buf->height, &ycbcr);
+			buf->width, buf->height, &ycbcr);
 	if (ret) {
 		ALOGE("Failed to lock_ycbcr for the buf - %d", buf->share_fd);
 		return -EINVAL;
@@ -896,8 +918,8 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 				&mDeinterBuf[0]);
 			allocBuffer(width, height, format,
 				CAMERA_USAGE,
-				&mTmpBuf[0]);
-			if ((mDeinterBuf[0] == NULL) || (mTmpBuf[0] == NULL)) {
+				&mJpgBuf[0]);
+			if ((mDeinterBuf[0] == NULL) || (mJpgBuf[0] == NULL)) {
 				ALOGE("[%s:%d:%d] Failed to alloc new buffer for Deinterlacing",
 						__func__, mCameraId, mType);
 				return -ENOMEM;
@@ -907,7 +929,7 @@ int Stream::registerBuffer(uint32_t fNum, const camera3_stream_buffer *buf,
 				ALOGE("Failed to dequeue NXCamera3Buffer from mFQ");
 				return -ENOMEM;
 			}
-			bTmp->init(fNum, buf->stream, buf->buffer, mTmpBuf[0], NULL, NULL);
+			bTmp->init(fNum, buf->stream, buf->buffer, mJpgBuf[0], NULL, NULL);
 			mQ.queue(bTmp);
 		}
 
@@ -978,6 +1000,32 @@ status_t Stream::prepareForRun()
 	}
 
 	ALOGDD("[%s:%d] bufferCount:%d", __func__, mType, bufferCount);
+	ph = (private_handle_t *)buf->getPrivateHandle();
+
+	if ((ph->format == HAL_PIXEL_FORMAT_BLOB) &&
+		(uint32_t)ph->size != JPEG_SIZE(mStream->width, mStream->height)) {
+#ifdef CAMERA_SUPPORT_SCALING
+		ALOGDD("[%s:%d] need a new buffer size:%d", __func__, mType, ph->size);
+		if (mJpgBuf[MAX_JPEG_BUFFER_COUNT-1] == NULL) {
+			if(getJpegResolution(mCameraId, ph->size, (uint32_t*)&width, (uint32_t*)&height))
+				goto drain;
+			allocBuffer(width, height,
+					HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
+					CAMERA_USAGE,
+					&mJpgBuf[MAX_JPEG_BUFFER_COUNT-1]);
+			if (mJpgBuf[MAX_JPEG_BUFFER_COUNT -1] == NULL) {
+				ALOGE("[%s:%d:%d] Failed to alloc new buffer for JPEG",
+						__func__, mCameraId, mType);
+				ret = -ENOMEM;
+				goto drain;
+			}
+		}
+#else
+		ALOGE("[%s:%d] buffer size(%d) isn't the same with stream(%d)", __func__, mType,
+				ph->size, JPEG_SIZE(mStream->width, mStream->height));
+		goto drain;
+#endif
+	}
 	if (mSkip) {
 		for (i = 0; i < bufferCount; i++) {
 			buf = mQ.dequeue();
@@ -1014,10 +1062,6 @@ status_t Stream::prepareForRun()
 	if (ph->format == HAL_PIXEL_FORMAT_BLOB) {
 		width = mStream->width;
 		height = mStream->height;
-		if (mInterlaced)
-			i = 1;
-		else
-			i = 0;
 		for (i = mInterlaced; i < mMaxBufIndex; i++) {
 			allocBuffer(width, height, format,
 				CAMERA_USAGE,
@@ -1028,9 +1072,9 @@ status_t Stream::prepareForRun()
 				ret = -ENOMEM;
 				goto drain;
 			}
-			mTmpBuf[i] = buffer;
+			mJpgBuf[i] = buffer;
 		}
-		ph = (private_handle_t *)mTmpBuf[0];
+		ph = (private_handle_t *)mJpgBuf[0];
 	}
 
 	if (mScaling) {
@@ -1081,7 +1125,7 @@ status_t Stream::prepareForRun()
 	}
 
 	if (ph->format == HAL_PIXEL_FORMAT_BLOB)
-		ret = setBufferFormat((private_handle_t*)mTmpBuf[0]);
+		ret = setBufferFormat((private_handle_t*)mJpgBuf[0]);
 	else
 		ret = setBufferFormat(ph);
 	if (ret) {
@@ -1111,7 +1155,7 @@ status_t Stream::prepareForRun()
 			dma_fd = buf->getZoomDmaFd();
 		else {
 			if (ph->format == HAL_PIXEL_FORMAT_BLOB) {
-				ph = (private_handle_t *)mTmpBuf[i];
+				ph = (private_handle_t *)mJpgBuf[i];
 				dma_fd = ph->share_fd;
 			} else
 				dma_fd = buf->getDmaFd();
@@ -1248,8 +1292,8 @@ int Stream::qBuf(NXCamera3Buffer *buf)
 	if (mScaling)
 		dma_fd = buf->getZoomDmaFd();
 	else {
-		if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mTmpBuf[mQIndex])) {
-			private_handle_t *ph = (private_handle_t *)mTmpBuf[mQIndex];
+		if ((mStream->format == HAL_PIXEL_FORMAT_BLOB) && (mJpgBuf[mQIndex])) {
+			private_handle_t *ph = (private_handle_t *)mJpgBuf[mQIndex];
 			dma_fd = ph->share_fd;
 		} else
 			dma_fd = buf->getDmaFd();
