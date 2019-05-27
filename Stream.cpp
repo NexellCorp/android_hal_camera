@@ -22,6 +22,7 @@
 #include <gralloc_priv.h>
 #include <nx-deinterlacer.h>
 #include <nx-scaler.h>
+#include <nx-v4l2.h>
 #include "GlobalDef.h"
 #include "metadata.h"
 #include "Stream.h"
@@ -507,7 +508,7 @@ int Stream::skipFrames(void)
 	buffer_handle_t frames[NUM_OF_SKIP_FRAMES];
 	private_handle_t *p;
 	size_t bufferCount = 0, i = 0;
-	int ret = -EINVAL, dma_fd = 0, dqIndex = 0, fd = 0;
+	int ret = -EINVAL, dma_fd = 0, dqIndex = 0;
 	private_handle_t *ph;
 
 	if (!NUM_OF_SKIP_FRAMES)
@@ -539,7 +540,7 @@ int Stream::skipFrames(void)
 	}
 
 	mMaxBufIndex = NUM_OF_SKIP_FRAMES + bufferCount;
-	ret = v4l2_req_buf(mFd, mMaxBufIndex);
+	ret = nx_v4l2_reqbuf(mFd, nx_clipper_video, mMaxBufIndex);
 	if (ret) {
 		ALOGE("Failed to req buf : %d, mFd:%d", ret, mFd);
 		goto drain;
@@ -553,9 +554,9 @@ int Stream::skipFrames(void)
 		}
 		p = (private_handle_t *)frames[i];
 		dma_fd = p->share_fd;
-		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
+		ret = nx_v4l2_qbuf(mFd, nx_clipper_video, 1, i, &dma_fd, (int*)&mSize);
 		if (ret) {
-			ALOGE("[%d] Failed to v4l2_qbuf (index:%zu), ret:%d",
+			ALOGE("[%d] Failed to nx_v4l2_qbuf (index:%zu), ret:%d",
 					mType, i, ret);
 			goto fail;
 		}
@@ -621,9 +622,9 @@ int Stream::skipFrames(void)
 		else
 			dma_fd = buf->getDmaFd();
 
-		ret = v4l2_qbuf(mFd, NUM_OF_SKIP_FRAMES+i, &dma_fd, 1, &mSize);
+		ret = nx_v4l2_qbuf(mFd, nx_clipper_video, 1, NUM_OF_SKIP_FRAMES+i, &dma_fd, (int*)&mSize);
 		if (ret) {
-			ALOGE("[%d] Failed to v4l2_qbuf for preview(index:%zu), ret:%d",
+			ALOGE("[%d] Failed to nx_v4l2_qbuf for preview(index:%zu), ret:%d",
 					mType, i, ret);
 			goto fail;
 		}
@@ -635,14 +636,14 @@ int Stream::skipFrames(void)
 		bufferCount--;
 	setBufIndex(bufferCount);
 
-	ret = v4l2_streamon(mFd);
+	ret = nx_v4l2_streamon(mFd, nx_clipper_video);
 	if (ret) {
 		ALOGE("Failed to stream on:%d", ret);
 		goto fail;
 	}
 
 	for (i = 0; i < NUM_OF_SKIP_FRAMES; i++) {
-		ret = v4l2_dqbuf(mFd, &dqIndex, &fd, 1);
+		ret = nx_v4l2_dqbuf(mFd, nx_clipper_video, 1, &dqIndex);
 		if (ret) {
 			ALOGE("Failed to dqbuf for preview:%d", ret);
 			goto stop;
@@ -656,12 +657,12 @@ int Stream::skipFrames(void)
 	return NO_ERROR;
 
 stop:
-	if (v4l2_streamoff(mFd))
+	if (nx_v4l2_streamoff(mFd, nx_clipper_video))
 		ALOGE("Failed to stream off");
 
 fail:
 	ALOGDV("[%s:%d:%d] fail : %d", __func__, mCameraId, mType, ret);
-	if (v4l2_req_buf(mFd, 0))
+	if (nx_v4l2_reqbuf(mFd, nx_clipper_video, 0))
 		ALOGE("Failed to reqbuf");
 free:
 	for (i = 0; i < NUM_OF_SKIP_FRAMES; i++) {
@@ -778,10 +779,10 @@ void Stream::stopV4l2()
 	if (mSkip)
 		return;
 	ALOGDV("[%s:%d:%d] enter", __func__, mCameraId, mType);
-	int ret = v4l2_streamoff(mFd);
+	int ret = nx_v4l2_streamoff(mFd, nx_clipper_video);
 	if (ret)
 		ALOGE("Failed to stop stream:%d", ret);
-	ret = v4l2_req_buf(mFd, 0);
+	ret = nx_v4l2_reqbuf(mFd, nx_clipper_video, 0);
 	if (ret)
 		ALOGE("Failed to req buf:%d", ret);
 
@@ -855,14 +856,15 @@ int Stream::setBufferFormat(private_handle_t *buf)
 		width = buf->width;
 		height = buf->height;
 	}
-	ret = v4l2_set_format(mFd, f, width, height, num_planes, strides, sizes);
+	ret = nx_v4l2_set_fmt(mFd, f, width, height, num_planes, strides, sizes);
 	if (ret) {
 		ALOGE("Failed to set format: %d", ret);
 		return ret;
 	}
 	if (mCrop) {
 		ALOGDD("[%s:%d] call set crop", __func__, mType);
-		ret = v4l2_set_crop(mFd, &mCropInfo);
+		ret = nx_v4l2_set_crop(mFd, nx_clipper_video, mCropInfo.left,
+				mCropInfo.top, mCropInfo.width, mCropInfo.height);
 		if (ret) {
 			ALOGE("Failed to set crop: %d", ret);
 			return ret;
@@ -1134,7 +1136,7 @@ status_t Stream::prepareForRun()
 		goto drain;
 	}
 
-	ret = v4l2_req_buf(mFd, mMaxBufIndex);
+	ret = nx_v4l2_reqbuf(mFd, nx_clipper_video, mMaxBufIndex);
 	if (ret) {
 		ALOGE("[%s:%d:%d] failed to req buf : %d, mFd:%d", __func__,
 				mCameraId, mType, ret, mFd);
@@ -1160,9 +1162,9 @@ status_t Stream::prepareForRun()
 			} else
 				dma_fd = buf->getDmaFd();
 		}
-		ret = v4l2_qbuf(mFd, i, &dma_fd, 1, &mSize);
+		ret = nx_v4l2_qbuf(mFd, nx_clipper_video, 1, i, &dma_fd, (int*)&mSize);
 		if (ret) {
-			ALOGE("[%s:%d:%d] Failed to v4l2_qbuf for preview(index:%zu), ret:%d",
+			ALOGE("[%s:%d:%d] Failed to nx_v4l2_qbuf for preview(index:%zu), ret:%d",
 					__func__, mCameraId, mType, i, ret);
 			goto fail;
 		}
@@ -1175,7 +1177,7 @@ status_t Stream::prepareForRun()
 		bufferCount--;
 	setBufIndex(bufferCount);
 
-	ret = v4l2_streamon(mFd);
+	ret = nx_v4l2_streamon(mFd, nx_clipper_video);
 	if (ret) {
 		ALOGE("[%s:%d:%d] Failed to stream on:%d", __func__, mCameraId, mType, ret);
 		goto fail;
@@ -1184,7 +1186,7 @@ status_t Stream::prepareForRun()
 
 fail:
 	ALOGDI("[%s:%d:%d] fail : %d", __func__, mCameraId, mType, ret);
-	if (v4l2_req_buf(mFd, 0))
+	if (nx_v4l2_reqbuf(mFd, nx_clipper_video, 0))
 		ALOGE("Failed to req buf(line:%d), mFd:%d", __LINE__, mFd);
 drain:
 	drainBuffer();
@@ -1197,7 +1199,7 @@ drain:
 
 int Stream::dQBuf(int *dqIndex)
 {
-	int ret = 0, fd = 0;
+	int ret = 0;
 
 	if (mSkip) {
 		dqIndex = 0;
@@ -1210,7 +1212,7 @@ int Stream::dQBuf(int *dqIndex)
 
 	gettimeofday(&start, NULL);
 #endif
-	ret = v4l2_dqbuf(mFd, dqIndex, &fd, 1);
+	ret = nx_v4l2_dqbuf(mFd, nx_clipper_video, 1, dqIndex);
 	if (ret) {
 		ALOGE("[%s:%d:%d] Failed to dqbuf:%d", __func__, mCameraId,
 				mType, ret);
@@ -1298,7 +1300,7 @@ int Stream::qBuf(NXCamera3Buffer *buf)
 		} else
 			dma_fd = buf->getDmaFd();
 	}
-	ret = v4l2_qbuf(mFd, mQIndex, &dma_fd, 1, &mSize);
+	ret = nx_v4l2_qbuf(mFd, nx_clipper_video, 1, mQIndex, &dma_fd, (int*)&mSize);
 	if (ret) {
 		ALOGE("[%s:%d:%d] Failed to qbuf index:%d, mFd:%d, ret:%d",
 				__func__, mCameraId, mType, mQIndex, mFd, ret);

@@ -33,28 +33,12 @@ ifneq ($(BOARD_CAMERA_BACK_ORIENTATION),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_BACK_ORIENTATION='$(BOARD_CAMERA_BACK_ORIENTATION)'
 endif
 
-ifneq ($(BOARD_CAMERA_BACK_INTERLACED),)
-	LOCAL_CFLAGS += -DBOARD_CAMERA_BACK_INTERLACED='$(BOARD_CAMERA_BACK_INTERLACED)'
-endif
-
-ifneq ($(BOARD_CAMERA_BACK_COPY_MODE),)
-	LOCAL_CFLAGS += -DBOARD_CAMERA_BACK_COPY_MODE='$(BOARD_CAMERA_BACK_COPY_MODE)'
-endif
-
 ifneq ($(BOARD_CAMERA_FRONT_DEVICE),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_FRONT_DEVICE='$(BOARD_CAMERA_FRONT_DEVICE)'
 endif
 
 ifneq ($(BOARD_CAMERA_FRONT_ORIENTATION),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_FRONT_ORIENTATION='$(BOARD_CAMERA_FRONT_ORIENTATION)'
-endif
-
-ifneq ($(BOARD_CAMERA_FRONT_INTERLACED),)
-	LOCAL_CFLAGS += -DBOARD_CAMERA_FRONT_INTERLACED='$(BOARD_CAMERA_FRONT_INTERLACED)'
-endif
-
-ifneq ($(BOARD_CAMERA_FRONT_COPY_MODE),)
-	LOCAL_CFLAGS += -DBOARD_CAMERA_FRONT_COPY_MODE='$(BOARD_CAMERA_FRONT_COPY_MODE)'
 endif
 
 ifeq ($(BOARD_CAMERA_USE_ZOOM), true)
@@ -74,7 +58,6 @@ LOCAL_SRC_FILES := \
 	StreamManager.cpp \
 	Stream.cpp \
 	Exif.cpp \
-	v4l2.cpp \
 	metadata.cpp \
 	ExifProcessor.cpp
 LOCAL_SHARED_LIBRARIES := \
@@ -87,6 +70,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libnxjpeg \
 	libnx_scaler \
 	libnx_deinterlacer \
+	libnx_v4l2
 
 ifeq ($(ANDROID_VERSION), 9)
 LOCAL_STATIC_LIBRARIES := android.hardware.camera.common@1.0-helper
@@ -107,6 +91,7 @@ LOCAL_C_INCLUDES += \
 	$(LOCAL_PATH)/../gralloc \
 	$(LOCAL_PATH)/../libnxjpeg \
 	external/libjpeg-turbo \
-	$(call include-path-for)
+	$(call include-path-for) \
+	device/nexell/library/nx-v4l2
 
 include $(BUILD_SHARED_LIBRARY)

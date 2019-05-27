@@ -20,8 +20,8 @@
 
 #include <nx-scaler.h>
 #include <nx-deinterlacer.h>
+#include <nx-v4l2.h>
 #include "GlobalDef.h"
-#include "v4l2.h"
 #include "metadata.h"
 #include "StreamManager.h"
 #include "Camera3HWInterface.h"
@@ -58,7 +58,7 @@ static void makeCameraInfo(void)
 	int video_num = 0, i = 0, j = 0;
 	char string[20] = {0, };
 	char *ptr = NULL;
-	int copy = 0;
+	int mipi = 0, interlaced = 0;
 
 	ALOGDI("[%s] num of cameras:%d, back:%s-%s-%s, front:%s-%s-%s", __func__,
 			NUM_OF_CAMERAS,
@@ -89,35 +89,6 @@ static void makeCameraInfo(void)
 			ptr = strtok(NULL, ",");
 		} else {
 			gCameraInfo[j].orientation = 0;
-			break;
-		}
-	}
-	if (BACK_CAMERA_INTERLACED)
-		strcpy(string, BACK_CAMERA_INTERLACED);
-	ptr = strtok(string, ",");
-	for (j = 0; j < i; j++) {
-		if (ptr != NULL) {
-			gCameraInfo[j].interlaced = atoi(ptr);
-			ptr = strtok(NULL, ",");
-		} else {
-			gCameraInfo[j].interlaced = 0;
-			break;
-		}
-	}
-
-	if (BACK_CAMERA_COPY_MODE)
-		strcpy(string, BACK_CAMERA_COPY_MODE);
-	ptr = strtok(string, ",");
-	for (j = 0; j < i; j++) {
-		if (ptr != NULL) {
-			copy = atoi(ptr);
-			if (copy)
-				gCameraInfo[j].max_handles = COPY_MAX_HANDLES;
-			else
-				gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
-			ptr = strtok(NULL, ",");
-		} else {
-			gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
 			break;
 		}
 	}
@@ -152,37 +123,19 @@ static void makeCameraInfo(void)
 		}
 	}
 
-	if (FRONT_CAMERA_INTERLACED)
-		strcpy(string, FRONT_CAMERA_INTERLACED);
-	ptr = strtok(string, ",");
-	for (j = p; j < i; j++) {
-		if (ptr != NULL) {
-			gCameraInfo[j].interlaced = atoi(ptr);
-			ptr = strtok(NULL, ",");
-		} else {
-			gCameraInfo[j].interlaced = 0;
-			break;
-		}
-	}
-
-	if (FRONT_CAMERA_COPY_MODE)
-		strcpy(string, FRONT_CAMERA_COPY_MODE);
-	ptr = strtok(string, ",");
-	for (j = p; j < i; j++) {
-		if (ptr != NULL) {
-			copy = atoi(ptr);
-			if (copy)
-				gCameraInfo[j].max_handles = COPY_MAX_HANDLES;
-			else
-				gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
-			ptr = strtok(NULL, ",");
-		} else {
-			gCameraInfo[j].max_handles = DEFAULT_MAX_HANDLES;
-			break;
-		}
-	}
-
 	for (i = 0; i < NUM_OF_CAMERAS; i++) {
+		mipi = 0;
+		interlaced = 0;
+
+		nx_v4l2_get_camera_type(gCameraInfo[i].dev_path, &mipi, &interlaced);
+		if (interlaced) {
+			gCameraInfo[i].interlaced = (mipi) ? interlaced : 0;/*interlaced + 1;*/
+			gCameraInfo[i].max_handles = (mipi) ? DEFAULT_MAX_HANDLES : COPY_MAX_HANDLES;
+		} else {
+			gCameraInfo[i].interlaced = interlaced;
+			gCameraInfo[i].max_handles = DEFAULT_MAX_HANDLES;
+		}
+
 		ALOGDI("[%s] %s device:%s, sub device:%s, orientation:%d, %d, %s-%d",
 				__func__,
 				(gCameraInfo[i].type) ? "front" : "back",

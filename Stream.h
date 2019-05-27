@@ -17,7 +17,6 @@
 #define STREAM_H
 
 #include "NXQueue.h"
-#include "v4l2.h"
 
 namespace android {
 
@@ -259,7 +258,7 @@ private:
 	Mutex mLock;
 	Condition mWakeUp;
 	NXCamera3Buffer mBuffers[MAX_BUFFER_COUNT+2];
-	struct v4l2_crop_info mCropInfo;
+	struct crop_info mCropInfo;
 
 	int setBufferFormat(private_handle_t *h);
 	int sendResult();
