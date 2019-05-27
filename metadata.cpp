@@ -9,8 +9,8 @@
 #include <camera/CameraMetadata.h>
 #endif
 
+#include <nx-v4l2.h>
 #include "GlobalDef.h"
-#include "v4l2.h"
 #include "metadata.h"
 
 #ifdef ANDROID_PIE
@@ -24,7 +24,7 @@ namespace android {
 int32_t pixel_array_size[NUM_OF_CAMERAS][2] = {{0, 0}, };
 
 #ifdef CAMERA_SUPPORT_SCALING
-struct v4l2_frame_info supported_lists[] = {
+struct nx_v4l2_frame_info supported_lists[] = {
 	{0, 176, 144, {15, 30}},/*QCIF*/
 	{1, 320, 240, {15, 30}},/*QVGA*/
 	{2, 352, 288, {15, 30}},/*CIF*/
@@ -35,8 +35,8 @@ struct v4l2_frame_info supported_lists[] = {
 #endif
 
 struct nx_sensor_info {
-	struct v4l2_frame_info frames[MAX_SUPPORTED_RESOLUTION];
-	struct v4l2_crop_info crop;
+	struct nx_v4l2_frame_info frames[MAX_SUPPORTED_RESOLUTION];
+	struct crop_info crop;
 };
 
 struct nx_sensor_info sensor_supported_lists[NUM_OF_CAMERAS] =
@@ -48,8 +48,8 @@ int getJpegResolution(uint32_t size,
 	int ret = 0;
 #ifdef CAMERA_SUPPORT_SCALING
 	int i;
-	struct v4l2_frame_info *s = NULL;
-	int list_size = sizeof(supported_lists)/sizeof(struct v4l2_frame_info);
+	struct nx_v4l2_frame_info *s = NULL;
+	int list_size = sizeof(supported_lists)/sizeof(struct nx_v4l2_frame_info);
 
 	for (i = 0; i < list_size; i ++) {
 		s = &supported_lists[i];
@@ -133,14 +133,14 @@ void getAvaliableResolution(uint32_t id, int *width, int *height)
 			__func__, w, h, dst_w, dst_h);
 }
 
-bool getCropInfo(uint32_t id, struct v4l2_crop_info *crop)
+bool getCropInfo(uint32_t id, struct crop_info *crop)
 {
-	struct v4l2_crop_info *c = &sensor_supported_lists[id].crop;
+	struct crop_info *c = &sensor_supported_lists[id].crop;
 
 	if (!c->width || !c->height)
 		return false;
 	else
-		memcpy(crop, c, sizeof(v4l2_crop_info));
+		memcpy(crop, c, sizeof(crop_info));
 
 	return true;
 }
@@ -151,39 +151,39 @@ void getActiveArraySize(uint32_t id, uint32_t *width, uint32_t *height)
 	*height = pixel_array_size[id][1];
 }
 
-static int32_t checkMinFps(uint32_t count, struct v4l2_frame_info *f)
+static int32_t checkMinFps(uint32_t count, struct nx_v4l2_frame_info *f)
 {
 	uint32_t i;
-	uint32_t min = f[0].interval[V4L2_INTERVAL_MIN];
+	uint32_t min = f[0].interval[INTERVAL_MIN];
 
 	if (count == 1)
 		return min;
 
 	for (i = 1; i < count; i++) {
-		if (f[i].interval[V4L2_INTERVAL_MIN] <
-				f[i-1].interval[V4L2_INTERVAL_MIN])
-			min = f[i].interval[V4L2_INTERVAL_MIN];
+		if (f[i].interval[INTERVAL_MIN] <
+				f[i-1].interval[INTERVAL_MIN])
+			min = f[i].interval[INTERVAL_MIN];
 	}
 	return min;
 }
 
-static int32_t checkMaxFps(uint32_t count, struct v4l2_frame_info *f)
+static int32_t checkMaxFps(uint32_t count, struct nx_v4l2_frame_info *f)
 {
 	uint32_t i;
-	uint32_t max = f[0].interval[V4L2_INTERVAL_MAX];
+	uint32_t max = f[0].interval[INTERVAL_MAX];
 
 	if (count == 1)
 		return max;
 
 	for (i = 1; i < count; i++) {
-		if (f[i].interval[V4L2_INTERVAL_MAX] >
-				f[i-1].interval[V4L2_INTERVAL_MAX])
-			max = f[i].interval[V4L2_INTERVAL_MAX];
+		if (f[i].interval[INTERVAL_MAX] >
+				f[i-1].interval[INTERVAL_MAX])
+			max = f[i].interval[INTERVAL_MAX];
 	}
 	return max;
 }
 
-static int32_t checkMaxJpegSize(uint32_t count, struct v4l2_frame_info *f)
+static int32_t checkMaxJpegSize(uint32_t count, struct nx_v4l2_frame_info *f)
 {
 	uint32_t i;
 	uint32_t max = (f[0].width * f[0].height)*3;
@@ -205,7 +205,8 @@ static uint32_t getFrameInfo(uint32_t id, int fd, struct nx_sensor_info *s)
 
 	ALOGDI("[%s] Camera:%d Information", __func__, id);
 
-	ret = v4l2_get_crop(fd, &s->crop);
+	ret = nx_v4l2_get_crop(fd, nx_clipper_video, &s->crop.left, &s->crop.top,
+			&s->crop.width, &s->crop.height);
 	if (ret)
 		ALOGDI("There is no crop info for %d camera", id);
 	else
@@ -218,12 +219,12 @@ static uint32_t getFrameInfo(uint32_t id, int fd, struct nx_sensor_info *s)
 
 	for (int j = 0; j < MAX_SUPPORTED_RESOLUTION; j++) {
 		s->frames[r].index = j;
-		ret = v4l2_get_framesize(fd, &s->frames[r]);
+		ret = nx_v4l2_get_framesize(fd, &s->frames[r]);
 		if (!ret) {
 			ALOGDI("[%d] width:%d, height:%d",
 			      r, s->frames[r].width, s->frames[r].height);
-			for (int i = 0; i <= V4L2_INTERVAL_MAX; i++) {
-				ret = v4l2_get_frameinterval(fd,
+			for (int i = 0; i <= INTERVAL_MAX; i++) {
+				ret = nx_v4l2_get_frameinterval(fd,
 								&s->frames[r],
 								i);
 				if (ret) {
@@ -442,14 +443,14 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 	/* To support multi resolutions that the sensor don't support */
 	int i, j = 0, count = 0;
 #ifdef CAMERA_SUPPORT_SCALING
-	int list_size = sizeof(supported_lists)/sizeof(struct v4l2_frame_info);
+	int list_size = sizeof(supported_lists)/sizeof(struct nx_v4l2_frame_info);
 #else
 	int list_size = 0;
 #endif
-	struct v4l2_frame_info lists[MAX_SUPPORTED_RESOLUTION];
-	struct v4l2_frame_info *sensor_lists;
+	struct nx_v4l2_frame_info lists[MAX_SUPPORTED_RESOLUTION];
+	struct nx_v4l2_frame_info *sensor_lists;
 	bool crop = true;
-	struct v4l2_frame_info crop_list = {0, s->crop.width, s->crop.height,
+	struct nx_v4l2_frame_info crop_list = {0, s->crop.width, s->crop.height,
 		{s->frames[0].interval[0], s->frames[0].interval[1]}};
 
 	if (!s->crop.width || !s->crop.height)
@@ -536,7 +537,7 @@ camera_metadata_t *initStaticMetadata(uint32_t id, uint32_t facing,
 			available_frame_min_durations[offset] = scaler_formats[f];
 			available_frame_min_durations[1+offset] = lists[j].width;
 			available_frame_min_durations[2+offset] = lists[j].height;
-			available_frame_min_durations[3+offset] = lists[j].interval[V4L2_INTERVAL_MIN];
+			available_frame_min_durations[3+offset] = lists[j].interval[INTERVAL_MIN];
 		}
 	}
 	staticInfo.update(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS,
