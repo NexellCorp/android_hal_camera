@@ -36,6 +36,7 @@ namespace android {
 
 	int v4l2_get_crop(int fd, struct v4l2_crop_info *crop);
 	int v4l2_set_crop(int fd, struct v4l2_crop_info *crop);
+	int v4l2_get_camera_type(char *video, int* mipi, int*interlaced);
 
 }; // namespace android
 
