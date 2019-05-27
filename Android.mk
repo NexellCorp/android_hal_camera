@@ -21,6 +21,10 @@ LOCAL_VENDOR_MODULE := true
 LOCAL_CFLAGS += -DANDROID_PIE
 endif
 
+ifeq ($(BOARD_CAMERA_USE_V4L2_LIB), true)
+LOCAL_CFLAGS += -DUSE_V4L2_LIB
+endif
+
 ifneq ($(BOARD_CAMERA_NUM),)
 	LOCAL_CFLAGS += -DBOARD_CAMERA_NUM=$(BOARD_CAMERA_NUM)
 endif
@@ -88,6 +92,11 @@ LOCAL_SHARED_LIBRARIES := \
 	libnx_scaler \
 	libnx_deinterlacer \
 
+ifeq ($(BOARD_CAMERA_USE_V4L2_LIB), true)
+LOCAL_SHARED_LIBRARIES += \
+	libnx_v4l2
+endif
+
 ifeq ($(ANDROID_VERSION), 9)
 LOCAL_STATIC_LIBRARIES := android.hardware.camera.common@1.0-helper
 else
@@ -107,6 +116,11 @@ LOCAL_C_INCLUDES += \
 	$(LOCAL_PATH)/../gralloc \
 	$(LOCAL_PATH)/../libnxjpeg \
 	external/libjpeg-turbo \
-	$(call include-path-for)
+	$(call include-path-for) \
+
+ifeq ($(BOARD_CAMERA_USE_V4L2_LIB), true)
+LOCAL_C_INCLUDES += \
+	device/nexell/library/nx-v4l2 \
+endif
 
 include $(BUILD_SHARED_LIBRARY)

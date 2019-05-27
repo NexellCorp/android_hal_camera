@@ -59,7 +59,9 @@ static void makeCameraInfo(void)
 	char string[20] = {0, };
 	char *ptr = NULL;
 	int copy = 0;
-
+#ifdef USE_V4L2_LIB
+	int mipi = 0, interlaced = 0;
+#endif
 	ALOGDI("[%s] num of cameras:%d, back:%s-%s-%s, front:%s-%s-%s", __func__,
 			NUM_OF_CAMERAS,
 			BACK_CAMERA_DEVICE, BACK_CAMERA_INTERLACED, BACK_CAMERA_COPY_MODE,
@@ -92,6 +94,8 @@ static void makeCameraInfo(void)
 			break;
 		}
 	}
+
+#ifndef USE_V4L2_LIB
 	if (BACK_CAMERA_INTERLACED)
 		strcpy(string, BACK_CAMERA_INTERLACED);
 	ptr = strtok(string, ",");
@@ -121,7 +125,7 @@ static void makeCameraInfo(void)
 			break;
 		}
 	}
-
+#endif
 	int p = i;
 	if (FRONT_CAMERA_DEVICE)
 		strcpy(string, FRONT_CAMERA_DEVICE);
@@ -152,6 +156,7 @@ static void makeCameraInfo(void)
 		}
 	}
 
+#ifndef USE_V4L2_LIB
 	if (FRONT_CAMERA_INTERLACED)
 		strcpy(string, FRONT_CAMERA_INTERLACED);
 	ptr = strtok(string, ",");
@@ -181,8 +186,20 @@ static void makeCameraInfo(void)
 			break;
 		}
 	}
-
+#endif
 	for (i = 0; i < NUM_OF_CAMERAS; i++) {
+#ifdef USE_V4L2_LIB
+		int mipi = 0, interlaced = 0;
+
+		v4l2_get_camera_type(gCameraInfo[i].dev_path, &mipi, &interlaced);
+		if (interlaced) {
+			gCameraInfo[i].interlaced = (mipi) ? interlaced : 0;/*interlaced + 1;*/
+			gCameraInfo[i].max_handles = (mipi) ? DEFAULT_MAX_HANDLES : COPY_MAX_HANDLES;
+		} else {
+			gCameraInfo[i].interlaced = interlaced;
+			gCameraInfo[i].max_handles = DEFAULT_MAX_HANDLES;
+		}
+#endif
 		ALOGDI("[%s] %s device:%s, sub device:%s, orientation:%d, %d, %s-%d",
 				__func__,
 				(gCameraInfo[i].type) ? "front" : "back",
