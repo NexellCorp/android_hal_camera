@@ -1218,8 +1218,8 @@ int Stream::dQBuf(int *dqIndex)
 				mType, ret);
 		return ret;
 	}
-	ALOGDD("[%s:%d:%d] dqIndex:%d, dma_fd:%d\n", __func__,
-			mCameraId, mType, *dqIndex, fd);
+	ALOGDD("[%s:%d:%d] dqIndex:%d\n", __func__,
+			mCameraId, mType, *dqIndex);
 
 	if (mInterlaced && mScaling) {
 		NXCamera3Buffer *buf = mRQ.getHead();
