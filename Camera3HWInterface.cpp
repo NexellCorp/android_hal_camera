@@ -129,7 +129,7 @@ static void makeCameraInfo(void)
 
 		nx_v4l2_get_camera_type(gCameraInfo[i].dev_path, &mipi, &interlaced);
 		if (interlaced) {
-			gCameraInfo[i].interlaced = (mipi) ? interlaced : 0;/*interlaced + 1;*/
+			gCameraInfo[i].interlaced = (mipi) ? interlaced : interlaced + 1;
 			gCameraInfo[i].max_handles = (mipi) ? DEFAULT_MAX_HANDLES : COPY_MAX_HANDLES;
 		} else {
 			gCameraInfo[i].interlaced = interlaced;
@@ -295,9 +295,10 @@ int Camera3HWInterface::initialize(const camera3_callback_ops_t *callback)
 		if (fd < 0) {
 			ALOGE("[%s:%d] Failed to open deinterlacer", __func__,
 					mCameraId);
-			return -ENODEV;
-		}
-		mDeinterlacer = fd;
+			gCameraInfo[mCameraId].interlaced = 0;
+			/*return -ENODEV;*/
+		} else
+			mDeinterlacer = fd;
 	}
 
 	if (mAllocator == NULL) {
