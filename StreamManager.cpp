@@ -123,13 +123,19 @@ int StreamManager::runStreamThread(camera3_stream_t *s)
 		for (int j = 0; j < NX_MAX_STREAM; j++)
 		{
 			if ((mStream[j] != NULL) && (mStream[j]->isRunning())) {
-				if ((mStream[j]->getWidth() == s->width) &&
-					(mStream[j]->getHeight() == s->height)) {
+				int p_w = (int)mStream[j]->getWidth();
+				int p_h = (int)mStream[j]->getHeight();
+				int c_w = (int)s->width, c_h = (int)s->height;
+
+				if ((p_w == c_w) && (p_h == c_h)) {
 #ifdef VERIFY_FRIST_FRAME
 					mStream[j]->stopStreaming();
 #endif
 				} else {
-					mStream[j]->stopStreaming();
+					getAvaliableResolution(mCameraId, &p_w, &p_h);
+					getAvaliableResolution(mCameraId, &c_w, &c_h);
+					if ((p_w != c_w) || (p_h != c_h))
+						mStream[j]->stopStreaming();
 				}
 			}
 		}
