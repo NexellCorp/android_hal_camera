@@ -699,9 +699,11 @@ int Stream::sendResult()
 	ALOGDV("[%s:%d:%d]", __func__, mCameraId, mType);
 
 	if (mInterlaced && mScaling) {
-		if (mDQ.size() == 1)
-			mDQ.dequeue();
-		else
+		if (mDQ.size() == 1) {
+			buf = mDQ.dequeue();
+			mFQ.queue(buf);
+			return -EINVAL;
+		 } else
 			buf = mDQ.getSecond();
 	} else
 		buf = mRQ.getHead();
@@ -797,6 +799,8 @@ void Stream::stopStreaming()
 
 	if (isRunning()) {
 		mWakeUp.signal();
+		while(!mRQ.isEmpty())
+			;
 		ALOGDV("[%s:%d:%d] requestExitAndWait Enter", __func__, mCameraId, mType);
 		requestExitAndWait();
 		ALOGDV("[%s:%d:%d] requestExitAndWait Exit", __func__, mCameraId, mType);
