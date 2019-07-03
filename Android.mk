@@ -89,9 +89,17 @@ LOCAL_C_INCLUDES += \
 	device/nexell/library/nx-scaler \
 	device/nexell/library/nx-deinterlacer \
 	$(LOCAL_PATH)/../gralloc \
-	$(LOCAL_PATH)/../libnxjpeg \
 	external/libjpeg-turbo \
 	$(call include-path-for) \
 	device/nexell/library/nx-v4l2
+
+ifeq ($(ANDROID_VERSION), 9)
+LOCAL_C_INCLUDES += \
+	device/nexell/library/libnxjpeg
+else
+LOCAL_C_INCLUDES += \
+	$(LOCAL_PATH)/../libnxjpeg
+endif
+
 
 include $(BUILD_SHARED_LIBRARY)
