@@ -799,8 +799,7 @@ void Stream::stopStreaming()
 
 	if (isRunning()) {
 		mWakeUp.signal();
-		while(!mRQ.isEmpty())
-			;
+		while(!mRQ.isEmpty());
 		ALOGDV("[%s:%d:%d] requestExitAndWait Enter", __func__, mCameraId, mType);
 		requestExitAndWait();
 		ALOGDV("[%s:%d:%d] requestExitAndWait Exit", __func__, mCameraId, mType);
@@ -854,11 +853,10 @@ int Stream::setBufferFormat(private_handle_t *buf)
 		return -EINVAL;
 	}
 
+	width = buf->width;
+	height = buf->height;
 	if (mCrop) {
 		getAvaliableResolution(mCameraId, &width, &height);
-	} else {
-		width = buf->width;
-		height = buf->height;
 	}
 	ret = nx_v4l2_set_fmt(mFd, f, width, height, num_planes, strides, sizes);
 	if (ret) {
@@ -1342,7 +1340,7 @@ bool Stream::threadLoop()
 
 	}
 
-	if(exitPending())
+	if(mRQ.isEmpty() && exitPending())
 		goto stop;
 
 	qSize = mQ.size();
@@ -1376,7 +1374,7 @@ bool Stream::threadLoop()
 		}
 	}
 
-	if(exitPending())
+	if(mRQ.isEmpty() && exitPending())
 		goto stop;
 
 	return true;
