@@ -719,7 +719,7 @@ int Camera3HWInterface::cameraDeviceClose()
 	}
 
 	if (mDeinterlacer >= 0) {
-		nx_scaler_close(mDeinterlacer);
+		nx_deinter_close(mDeinterlacer);
 		mDeinterlacer = -1;
 	}
 
