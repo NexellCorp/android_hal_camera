@@ -86,16 +86,16 @@ LOCAL_C_INCLUDES += \
 	system/core/include/utils \
 	frameworks/native/include \
 	frameworks/av/include \
-	device/nexell/library/nx-scaler \
-	device/nexell/library/nx-deinterlacer \
+	vendor/nexell/library/nx-scaler \
+	vendor/nexell/library/nx-deinterlacer \
 	$(LOCAL_PATH)/../gralloc \
 	external/libjpeg-turbo \
 	$(call include-path-for) \
-	device/nexell/library/nx-v4l2
+	vendor/nexell/library/nx-v4l2
 
 ifeq ($(ANDROID_VERSION), 9)
 LOCAL_C_INCLUDES += \
-	device/nexell/library/libnxjpeg
+	vendor/nexell/library/libnxjpeg
 else
 LOCAL_C_INCLUDES += \
 	$(LOCAL_PATH)/../libnxjpeg
